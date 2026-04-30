@@ -9,6 +9,11 @@ const state = {
   lastIsbnAt: 0,
   stream: null,
   cameraActive: false,
+  autoScanTimerId: null,
+  liveDetectionInProgress: false,
+  liveDetectedValue: "",
+  liveDetectedCount: 0,
+  liveLastSeenAt: 0,
 };
 
 const elements = {
@@ -17,7 +22,6 @@ const elements = {
   placeholder: document.getElementById("scannerPlaceholder"),
   status: document.getElementById("statusMessage"),
   startBtn: document.getElementById("startScannerBtn"),
-  captureBtn: document.getElementById("capturePhotoBtn"),
   cancelBtn: document.getElementById("cancelCameraBtn"),
   imageInput: document.getElementById("barcodeImageInput"),
   manualForm: document.getElementById("manualIsbnForm"),
@@ -37,7 +41,6 @@ async function initialize() {
 
 function wireEvents() {
   elements.startBtn.addEventListener("click", startScanner);
-  elements.captureBtn.addEventListener("click", captureCameraPhoto);
   elements.cancelBtn.addEventListener("click", cancelCamera);
   elements.imageInput.addEventListener("change", onImageSelected);
   elements.manualForm.addEventListener("submit", onManualSubmit);
@@ -66,7 +69,7 @@ async function setupDetector() {
 
   if (canScanBooks()) {
     setStatus(
-      "Scanner ready. Open the camera, line the barcode up with the center bar, and take the picture.",
+      "Scanner ready. Open the camera, line the barcode up with the center bar, and the app will scan it automatically.",
       "info"
     );
     return;
@@ -103,7 +106,7 @@ async function startScanner() {
 async function startLiveCamera() {
   try {
     stopCamera();
-    setStatus("Requesting camera access. Then line the barcode up with the center bar and tap Take Picture.", "info");
+    setStatus("Requesting camera access. Then line the barcode up with the center bar and hold still for automatic scanning.", "info");
 
     state.stream = await navigator.mediaDevices.getUserMedia({
       video: {
@@ -122,9 +125,10 @@ async function startLiveCamera() {
     elements.preview.hidden = true;
     elements.placeholder.hidden = true;
     elements.startBtn.hidden = true;
-    elements.captureBtn.hidden = false;
     elements.cancelBtn.hidden = false;
-    setStatus("Center the barcode on the glowing line, then tap Take Picture.", "info");
+    resetLiveDetectionState();
+    setStatus("Center the barcode on the glowing line. As soon as it looks readable, the app will capture it automatically.", "info");
+    scheduleNextLiveDetection();
   } catch (error) {
     console.error(error);
 
@@ -152,35 +156,6 @@ function openPhotoPicker() {
   }
 }
 
-async function captureCameraPhoto() {
-  if (!state.cameraActive || elements.video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
-    setStatus("The camera preview is not ready yet. Give it a moment and try again.", "warning");
-    return;
-  }
-
-  try {
-    const captureCanvas = drawVideoFrameToCanvas(elements.video);
-    showCanvasPreview(captureCanvas);
-    stopCamera();
-    setStatus("Scanning the captured barcode photo...", "info");
-
-    const rawValue = await detectBarcodeFromCanvas(captureCanvas);
-    if (!rawValue) {
-      setStatus(
-        "I could not read that barcode. Try moving the barcode closer to the center line and filling more of the frame.",
-        "error"
-      );
-      return;
-    }
-
-    await handleDetectedBarcode(rawValue);
-  } catch (error) {
-    console.error(error);
-    stopCamera();
-    setStatus("That photo could not be scanned. Try again with the barcode centered on the guide line.", "error");
-  }
-}
-
 function cancelCamera() {
   stopCamera();
   clearPreview();
@@ -188,18 +163,24 @@ function cancelCamera() {
 }
 
 function stopCamera() {
+  if (state.autoScanTimerId) {
+    window.clearTimeout(state.autoScanTimerId);
+    state.autoScanTimerId = null;
+  }
+
   if (state.stream) {
     state.stream.getTracks().forEach((track) => track.stop());
     state.stream = null;
   }
 
   state.cameraActive = false;
+  state.liveDetectionInProgress = false;
   elements.video.pause();
   elements.video.srcObject = null;
   elements.video.hidden = true;
   elements.startBtn.hidden = false;
-  elements.captureBtn.hidden = true;
   elements.cancelBtn.hidden = true;
+  resetLiveDetectionState();
 
   if (elements.preview.hidden) {
     elements.placeholder.hidden = false;
@@ -242,6 +223,113 @@ async function onImageSelected(event) {
   } finally {
     event.target.value = "";
   }
+}
+
+function scheduleNextLiveDetection() {
+  if (!state.cameraActive) {
+    return;
+  }
+
+  state.autoScanTimerId = window.setTimeout(runLiveDetection, 80);
+}
+
+async function runLiveDetection() {
+  if (!state.cameraActive) {
+    return;
+  }
+
+  if (state.liveDetectionInProgress || state.lookupInProgress) {
+    scheduleNextLiveDetection();
+    return;
+  }
+
+  if (elements.video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+    scheduleNextLiveDetection();
+    return;
+  }
+
+  state.liveDetectionInProgress = true;
+
+  try {
+    const liveResult = await detectLiveBarcode();
+    const rawValue = liveResult?.rawValue || null;
+
+    if (!rawValue) {
+      state.liveDetectedValue = "";
+      state.liveDetectedCount = 0;
+      state.liveLastSeenAt = 0;
+      scheduleNextLiveDetection();
+      return;
+    }
+
+    const isbnMatch = resolveIsbn(rawValue);
+    if (!isbnMatch) {
+      state.liveDetectedValue = "";
+      state.liveDetectedCount = 0;
+      state.liveLastSeenAt = 0;
+      scheduleNextLiveDetection();
+      return;
+    }
+
+    const { isbn, correctedFrom } = isbnMatch;
+    const now = Date.now();
+    const needsExtraConfirmation =
+      Boolean(correctedFrom) || !liveResult || liveResult.source.startsWith("quagga");
+
+    if (isbn === state.liveDetectedValue && now - state.liveLastSeenAt < 1200) {
+      state.liveDetectedCount += 1;
+    } else {
+      state.liveDetectedValue = isbn;
+      state.liveDetectedCount = 1;
+    }
+    state.liveLastSeenAt = now;
+
+    const requiredCount = needsExtraConfirmation ? 2 : 1;
+
+    if (state.liveDetectedCount < requiredCount) {
+      setStatus("Barcode found. Hold still for a moment while I confirm it...", "info");
+      scheduleNextLiveDetection();
+      return;
+    }
+
+    await captureAndProcessDetectedFrame({
+      fallbackRawValue: rawValue,
+      fallbackIsbn: isbn,
+    });
+  } catch (error) {
+    console.error(error);
+    scheduleNextLiveDetection();
+  } finally {
+    state.liveDetectionInProgress = false;
+  }
+}
+
+function resetLiveDetectionState() {
+  state.liveDetectedValue = "";
+  state.liveDetectedCount = 0;
+  state.liveLastSeenAt = 0;
+}
+
+async function captureAndProcessDetectedFrame({ fallbackRawValue, fallbackIsbn }) {
+  const previewCanvas = drawVideoFrameToCanvas(elements.video);
+  const guideCanvas = drawGuideFrameToCanvas(elements.video);
+
+  showCanvasPreview(previewCanvas);
+  stopCamera();
+  setStatus("Barcode locked. Capturing a still image and scanning it now...", "info");
+
+  const capturedRawValue =
+    (await detectBarcodeFromCanvas(guideCanvas)) ||
+    (await detectBarcodeFromCanvas(previewCanvas)) ||
+    fallbackRawValue ||
+    fallbackIsbn;
+
+  if (!capturedRawValue) {
+    setStatus("I saw the barcode, but the captured frame was still unclear. Please try again.", "error");
+    return;
+  }
+
+  await handleDetectedBarcode(capturedRawValue);
 }
 
 async function onManualSubmit(event) {
@@ -408,6 +496,37 @@ async function detectBarcodeFromCanvas(sourceCanvas) {
   return null;
 }
 
+async function detectLiveBarcode() {
+  const guideCanvas = drawGuideFrameToCanvas(elements.video);
+
+  const detectorVideoValue = await detectWithBarcodeDetector(elements.video);
+  if (detectorVideoValue) {
+    return { rawValue: detectorVideoValue, source: "detector-video" };
+  }
+
+  const detectorGuideValue = await detectWithBarcodeDetector(guideCanvas);
+  if (detectorGuideValue) {
+    return { rawValue: detectorGuideValue, source: "detector-guide" };
+  }
+
+  const detectorContrastValue = await detectWithBarcodeDetector(createContrastCanvas(guideCanvas, 1.25, 10));
+  if (detectorContrastValue) {
+    return { rawValue: detectorContrastValue, source: "detector-contrast" };
+  }
+
+  const quaggaGuideValue = await detectWithQuagga(guideCanvas, true);
+  if (quaggaGuideValue) {
+    return { rawValue: quaggaGuideValue, source: "quagga-guide" };
+  }
+
+  const quaggaContrastValue = await detectWithQuagga(createGrayscaleCanvas(guideCanvas, 1.45, 12), true);
+  if (quaggaContrastValue) {
+    return { rawValue: quaggaContrastValue, source: "quagga-contrast" };
+  }
+
+  return null;
+}
+
 function buildScanCandidates(sourceCanvas) {
   const base = normalizeCanvas(sourceCanvas);
   const crops = [
@@ -429,27 +548,25 @@ function buildScanCandidates(sourceCanvas) {
   return variants;
 }
 
-async function detectWithBarcodeDetector(candidateCanvas) {
+async function detectWithBarcodeDetector(source) {
   if (!state.detector) {
     return null;
   }
 
-  const bitmap = await createImageBitmap(candidateCanvas);
-
   try {
-    const detected = await state.detector.detect(bitmap);
+    const detected = await state.detector.detect(source);
     return detected[0]?.rawValue || null;
   } catch (error) {
     console.error(error);
-    return null;
-  } finally {
-    if (typeof bitmap.close === "function") {
-      bitmap.close();
+    if (!(source instanceof HTMLCanvasElement)) {
+      return null;
     }
   }
+
+  return null;
 }
 
-function detectWithQuagga(candidateCanvas) {
+function detectWithQuagga(candidateCanvas, isLiveScan = false) {
   if (typeof window.Quagga?.decodeSingle !== "function") {
     return Promise.resolve(null);
   }
@@ -464,8 +581,8 @@ function detectWithQuagga(candidateCanvas) {
           size: Math.max(candidateCanvas.width, candidateCanvas.height),
         },
         locator: {
-          patchSize: "medium",
-          halfSample: false,
+          patchSize: isLiveScan ? "small" : "medium",
+          halfSample: isLiveScan,
         },
         decoder: {
           readers: ["ean_reader", "ean_8_reader", "upc_reader", "upc_e_reader", "code_128_reader"],
@@ -489,6 +606,33 @@ function drawVideoFrameToCanvas(video) {
   canvas.width = Math.max(1, Math.round(width * scale));
   canvas.height = Math.max(1, Math.round(height * scale));
   context.drawImage(video, 0, 0, canvas.width, canvas.height);
+  return canvas;
+}
+
+function drawGuideFrameToCanvas(video) {
+  const videoWidth = video.videoWidth || 1280;
+  const videoHeight = video.videoHeight || 720;
+  const sourceX = Math.round(videoWidth * 0.06);
+  const sourceY = Math.round(videoHeight * 0.28);
+  const sourceWidth = Math.round(videoWidth * 0.88);
+  const sourceHeight = Math.round(videoHeight * 0.44);
+  const canvas = document.createElement("canvas");
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  const scale = Math.min(1, MAX_SCAN_DIMENSION / Math.max(sourceWidth, sourceHeight));
+
+  canvas.width = Math.max(1, Math.round(sourceWidth * scale));
+  canvas.height = Math.max(1, Math.round(sourceHeight * scale));
+  context.drawImage(
+    video,
+    sourceX,
+    sourceY,
+    sourceWidth,
+    sourceHeight,
+    0,
+    0,
+    canvas.width,
+    canvas.height
+  );
   return canvas;
 }
 
