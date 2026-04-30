@@ -3,22 +3,16 @@ const STORAGE_KEY = "your-library-books";
 const state = {
   detector: null,
   library: loadLibrary(),
-  stream: null,
-  scannerActive: false,
-  scanTimeoutId: null,
   lookupInProgress: false,
   lastIsbn: "",
   lastIsbnAt: 0,
 };
 
 const elements = {
-  video: document.getElementById("scannerVideo"),
-  canvas: document.getElementById("scannerCanvas"),
+  preview: document.getElementById("scannerPreview"),
   placeholder: document.getElementById("scannerPlaceholder"),
   status: document.getElementById("statusMessage"),
-  supportNote: document.getElementById("supportNote"),
   startBtn: document.getElementById("startScannerBtn"),
-  stopBtn: document.getElementById("stopScannerBtn"),
   imageInput: document.getElementById("barcodeImageInput"),
   manualForm: document.getElementById("manualIsbnForm"),
   manualInput: document.getElementById("manualIsbnInput"),
@@ -37,148 +31,79 @@ async function initialize() {
 
 function wireEvents() {
   elements.startBtn.addEventListener("click", startScanner);
-  elements.stopBtn.addEventListener("click", stopScanner);
   elements.imageInput.addEventListener("change", onImageSelected);
   elements.manualForm.addEventListener("submit", onManualSubmit);
   elements.clearLibraryBtn.addEventListener("click", clearLibrary);
   elements.libraryGrid.addEventListener("click", onLibraryAction);
-  window.addEventListener("beforeunload", stopScanner);
 }
 
 async function setupDetector() {
-  if (!("BarcodeDetector" in window)) {
-    setStatus(
-      "Live barcode scanning is not supported in this browser. You can still upload a barcode photo or type an ISBN.",
-      "warning"
-    );
-    elements.startBtn.disabled = true;
-    return;
+  if ("BarcodeDetector" in window) {
+    try {
+      const preferredFormats = ["ean_13", "ean_8", "upc_a", "upc_e", "code_128"];
+      const supportedFormats = BarcodeDetector.getSupportedFormats
+        ? await BarcodeDetector.getSupportedFormats()
+        : preferredFormats;
+      const formats = preferredFormats.filter((format) => supportedFormats.includes(format));
+
+      state.detector = new BarcodeDetector({
+        formats: formats.length ? formats : preferredFormats,
+      });
+    } catch (error) {
+      console.error(error);
+      state.detector = null;
+    }
   }
 
-  try {
-    const preferredFormats = ["ean_13", "ean_8", "upc_a", "upc_e", "code_128"];
-    const supportedFormats = BarcodeDetector.getSupportedFormats
-      ? await BarcodeDetector.getSupportedFormats()
-      : preferredFormats;
-    const formats = preferredFormats.filter((format) => supportedFormats.includes(format));
-
-    state.detector = new BarcodeDetector({
-      formats: formats.length ? formats : preferredFormats,
-    });
-
+  if (canScanFromPhoto()) {
     setStatus(
-      "Scanner ready. Start the camera, upload a barcode photo, or enter an ISBN manually.",
+      "Scanner ready. Tap Scan Barcode to take a photo, or enter an ISBN manually.",
       "info"
     );
-  } catch (error) {
-    console.error(error);
-    setStatus(
-      "Barcode scanning could not be started in this browser. Manual ISBN entry is still available.",
-      "warning"
-    );
-    elements.startBtn.disabled = true;
-  }
-}
-
-async function startScanner() {
-  if (!state.detector) {
-    setStatus(
-      "The live scanner is unavailable here. Try Chrome or Edge, or use the image upload and ISBN input instead.",
-      "warning"
-    );
     return;
   }
 
-  if (!navigator.mediaDevices?.getUserMedia) {
-    setStatus("This browser does not support camera access.", "error");
+  setStatus(
+    "Barcode scanning from a photo is not supported in this browser. You can still type an ISBN manually.",
+    "warning"
+  );
+  elements.startBtn.disabled = true;
+  elements.imageInput.disabled = true;
+}
+
+function startScanner() {
+  if (!canScanFromPhoto()) {
+    setStatus(
+      "Camera scanning is unavailable here. Try Chrome or Edge, or use the ISBN input instead.",
+      "warning"
+    );
     return;
   }
 
   try {
-    state.stream = await navigator.mediaDevices.getUserMedia({
-      video: {
-        facingMode: { ideal: "environment" },
-      },
-      audio: false,
-    });
+    clearPreview();
+    setStatus("Opening your camera. If your browser asks for permission, choose the camera option you want.", "info");
 
-    elements.video.srcObject = state.stream;
-    await elements.video.play();
-    state.scannerActive = true;
-    elements.video.classList.add("is-active");
-    elements.placeholder.hidden = true;
-    elements.startBtn.disabled = true;
-    elements.stopBtn.disabled = false;
-    setStatus("Camera is live. Hold the barcode inside the frame.", "info");
-    queueNextScan();
-  } catch (error) {
-    console.error(error);
-    const message = window.isSecureContext
-      ? "Camera access was blocked. Please allow camera permission and try again."
-      : "Camera scanning needs a secure page such as http://localhost or https://.";
-    setStatus(message, "error");
-  }
-}
-
-function stopScanner() {
-  state.scannerActive = false;
-
-  if (state.scanTimeoutId) {
-    window.clearTimeout(state.scanTimeoutId);
-    state.scanTimeoutId = null;
-  }
-
-  if (state.stream) {
-    state.stream.getTracks().forEach((track) => track.stop());
-    state.stream = null;
-  }
-
-  elements.video.pause();
-  elements.video.srcObject = null;
-  elements.video.classList.remove("is-active");
-  elements.placeholder.hidden = false;
-  elements.startBtn.disabled = !state.detector;
-  elements.stopBtn.disabled = true;
-}
-
-function queueNextScan() {
-  if (!state.scannerActive) {
-    return;
-  }
-
-  state.scanTimeoutId = window.setTimeout(scanVideoFrame, 350);
-}
-
-async function scanVideoFrame() {
-  if (!state.scannerActive) {
-    return;
-  }
-
-  try {
-    if (
-      !state.lookupInProgress &&
-      state.detector &&
-      elements.video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
-    ) {
-      const detected = await state.detector.detect(elements.video);
-      if (detected.length > 0) {
-        await handleDetectedBarcode(detected[0].rawValue);
-      }
+    if (typeof elements.imageInput.showPicker === "function") {
+      elements.imageInput.showPicker();
+      return;
     }
+
+    elements.imageInput.click();
   } catch (error) {
     console.error(error);
-  } finally {
-    queueNextScan();
+    setStatus("Your browser blocked the camera chooser. Try tapping the photo field below instead.", "error");
   }
 }
 
 async function onImageSelected(event) {
   const file = event.target.files?.[0];
   if (!file) {
+    setStatus("Camera cancelled. Tap Scan Barcode when you want to try again.", "info");
     return;
   }
 
-  if (!state.detector) {
+  if (!canScanFromPhoto()) {
     setStatus(
       "Photo barcode reading is not supported in this browser. Please type the ISBN manually.",
       "warning"
@@ -188,11 +113,11 @@ async function onImageSelected(event) {
   }
 
   try {
-    setStatus("Scanning the uploaded barcode image...", "info");
-    const bitmap = await createImageBitmap(file);
-    const detected = await state.detector.detect(bitmap);
+    showPreview(file);
+    setStatus("Scanning the barcode photo...", "info");
+    const rawValue = await detectBarcodeFromFile(file);
 
-    if (!detected.length) {
+    if (!rawValue) {
       setStatus(
         "No barcode was found in that image. Try a sharper photo or enter the ISBN manually.",
         "error"
@@ -200,7 +125,7 @@ async function onImageSelected(event) {
       return;
     }
 
-    await handleDetectedBarcode(detected[0].rawValue);
+    await handleDetectedBarcode(rawValue);
   } catch (error) {
     console.error(error);
     setStatus("That image could not be scanned. Try another photo or type the ISBN manually.", "error");
@@ -461,6 +386,87 @@ function sortLibrary() {
 function setStatus(message, type = "info") {
   elements.status.textContent = message;
   elements.status.className = `status status-${type}`;
+}
+
+function canScanFromPhoto() {
+  return Boolean(state.detector || typeof window.Quagga?.decodeSingle === "function");
+}
+
+function showPreview(file) {
+  clearPreview();
+  const previewUrl = URL.createObjectURL(file);
+  elements.preview.src = previewUrl;
+  elements.preview.hidden = false;
+  elements.placeholder.hidden = true;
+  elements.preview.dataset.objectUrl = previewUrl;
+}
+
+function clearPreview() {
+  const currentUrl = elements.preview.dataset.objectUrl;
+  if (currentUrl) {
+    URL.revokeObjectURL(currentUrl);
+    delete elements.preview.dataset.objectUrl;
+  }
+
+  elements.preview.hidden = true;
+  elements.preview.removeAttribute("src");
+  elements.placeholder.hidden = false;
+}
+
+async function detectBarcodeFromFile(file) {
+  const barcodeDetectorValue = await detectWithBarcodeDetector(file);
+  if (barcodeDetectorValue) {
+    return barcodeDetectorValue;
+  }
+
+  return detectWithQuagga();
+}
+
+async function detectWithBarcodeDetector(file) {
+  if (!state.detector) {
+    return null;
+  }
+
+  const bitmap = await createImageBitmap(file);
+
+  try {
+    const detected = await state.detector.detect(bitmap);
+    return detected[0]?.rawValue || null;
+  } finally {
+    if (typeof bitmap.close === "function") {
+      bitmap.close();
+    }
+  }
+}
+
+function detectWithQuagga() {
+  if (typeof window.Quagga?.decodeSingle !== "function") {
+    return Promise.resolve(null);
+  }
+
+  const imageUrl = elements.preview.dataset.objectUrl;
+  if (!imageUrl) {
+    return Promise.resolve(null);
+  }
+
+  return new Promise((resolve) => {
+    window.Quagga.decodeSingle(
+      {
+        src: imageUrl,
+        locate: true,
+        numOfWorkers: 0,
+        inputStream: {
+          size: 1000,
+        },
+        decoder: {
+          readers: ["ean_reader", "ean_8_reader", "upc_reader", "upc_e_reader", "code_128_reader"],
+        },
+      },
+      (result) => {
+        resolve(result?.codeResult?.code || null);
+      }
+    );
+  });
 }
 
 function extractIsbn(rawValue) {

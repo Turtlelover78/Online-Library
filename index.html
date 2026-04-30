@@ -42,36 +42,31 @@
             </div>
             <div class="panel-actions">
               <button id="startScannerBtn" class="btn btn-primary" type="button">
-                Start Camera Scan
-              </button>
-              <button id="stopScannerBtn" class="btn btn-secondary" type="button" disabled>
-                Stop
+                Scan Barcode
               </button>
             </div>
           </div>
 
           <div class="scanner-frame">
-            <video id="scannerVideo" autoplay muted playsinline></video>
+            <img id="scannerPreview" alt="Captured barcode preview" hidden />
             <div class="scanner-overlay" aria-hidden="true">
               <span></span>
             </div>
             <div id="scannerPlaceholder" class="scanner-placeholder">
-              <p>Camera preview will appear here.</p>
-              <p class="scanner-tip">Tip: hold the ISBN barcode steady inside the frame.</p>
+              <p>Tap the button above to open your camera.</p>
+              <p class="scanner-tip">Take a clear picture of the barcode on the back of the book.</p>
             </div>
           </div>
 
-          <canvas id="scannerCanvas" hidden></canvas>
-
           <div id="statusMessage" class="status status-info" role="status">
-            Ready. You can start the camera, upload a barcode image, or type an ISBN manually.
+            Ready. Tap Scan Barcode to open your camera, or type an ISBN manually.
           </div>
 
           <div class="input-grid">
             <label class="field-card" for="barcodeImageInput">
-              <span class="field-label">Upload a barcode photo</span>
+              <span class="field-label">Camera or barcode photo</span>
               <input id="barcodeImageInput" type="file" accept="image/*" capture="environment" />
-              <span class="field-help">Useful when live camera scanning is unavailable.</span>
+              <span class="field-help">The scan button opens this camera/photo chooser for you.</span>
             </label>
 
             <form id="manualIsbnForm" class="field-card">
@@ -92,8 +87,8 @@
           </div>
 
           <div class="support-note" id="supportNote">
-            Live camera scanning works best in Chrome or Edge on <code>http://localhost</code> or
-            <code>https</code>.
+            Your browser controls the camera permission popup. On mobile, this usually lets you allow access
+            once, always allow it, or cancel.
           </div>
         </section>
 
@@ -119,6 +114,7 @@
       </main>
     </div>
 
+    <script src="https://cdn.jsdelivr.net/npm/@ericblade/quagga2@1.8.4/dist/quagga.min.js"></script>
     <script src="./script.js"></script>
   </body>
 </html>
