@@ -46,6 +46,7 @@ function wireEvents() {
   elements.manualForm.addEventListener("submit", onManualSubmit);
   elements.clearLibraryBtn.addEventListener("click", clearLibrary);
   elements.libraryGrid.addEventListener("click", onLibraryAction);
+  elements.libraryGrid.addEventListener("error", onLibraryImageError, true);
   window.addEventListener("beforeunload", stopCamera);
 }
 
@@ -384,6 +385,7 @@ async function handleDetectedBarcode(rawValue) {
       title: book.title,
       authors: book.authors,
       cover: book.cover,
+      coverOptions: book.coverOptions,
       publisher: book.publisher,
       publishedDate: book.publishedDate,
       description: book.description,
@@ -423,10 +425,20 @@ async function lookupBookByIsbn(isbn) {
     publisher: googleBook?.publisher || openLibraryBook?.publisher || "Unknown Publisher",
     publishedDate: googleBook?.publishedDate || openLibraryBook?.publishedDate || "Unknown Date",
     description: googleBook?.description || openLibraryBook?.description || "",
-    cover:
-      googleBook?.cover ||
-      openLibraryBook?.cover ||
+    cover: pickFirstCoverUrl(googleBook?.coverOptions, openLibraryBook?.coverOptions, [
       `https://covers.openlibrary.org/b/isbn/${encodeURIComponent(isbn)}-L.jpg`,
+      `https://covers.openlibrary.org/b/isbn/${encodeURIComponent(isbn)}-M.jpg`,
+      `https://covers.openlibrary.org/b/isbn/${encodeURIComponent(isbn)}-S.jpg`,
+    ]),
+    coverOptions: uniqueCoverUrls(
+      googleBook?.coverOptions || [],
+      openLibraryBook?.coverOptions || [],
+      [
+        `https://covers.openlibrary.org/b/isbn/${encodeURIComponent(isbn)}-L.jpg`,
+        `https://covers.openlibrary.org/b/isbn/${encodeURIComponent(isbn)}-M.jpg`,
+        `https://covers.openlibrary.org/b/isbn/${encodeURIComponent(isbn)}-S.jpg`,
+      ]
+    ),
   };
 }
 
@@ -450,7 +462,13 @@ async function fetchGoogleBook(isbn) {
     publisher: info.publisher || "",
     publishedDate: info.publishedDate || "",
     description: info.description || "",
-    cover: normalizeCoverUrl(info.imageLinks?.thumbnail || info.imageLinks?.smallThumbnail || ""),
+    coverOptions: uniqueCoverUrls([
+      normalizeCoverUrl(info.imageLinks?.large || ""),
+      normalizeCoverUrl(info.imageLinks?.medium || ""),
+      normalizeCoverUrl(info.imageLinks?.small || ""),
+      normalizeCoverUrl(info.imageLinks?.thumbnail || ""),
+      normalizeCoverUrl(info.imageLinks?.smallThumbnail || ""),
+    ]),
   };
 }
 
@@ -474,7 +492,11 @@ async function fetchOpenLibraryBook(isbn) {
     publisher: info.publishers?.[0]?.name || "",
     publishedDate: info.publish_date || "",
     description: typeof info.notes === "string" ? info.notes : "",
-    cover: info.cover?.large || info.cover?.medium || info.cover?.small || "",
+    coverOptions: uniqueCoverUrls([
+      info.cover?.large || "",
+      info.cover?.medium || "",
+      info.cover?.small || "",
+    ]),
   };
 }
 
@@ -780,15 +802,36 @@ function renderLibrary() {
       const published = book.publishedDate || "Unknown date";
       const publisher = book.publisher || "Unknown publisher";
       const scannedAt = formatDate(book.scannedAt);
-      const coverMarkup = book.cover
+      const isbnCoverFallbacks = book.isbn
+        ? [
+            `https://covers.openlibrary.org/b/isbn/${encodeURIComponent(book.isbn)}-L.jpg`,
+            `https://covers.openlibrary.org/b/isbn/${encodeURIComponent(book.isbn)}-M.jpg`,
+            `https://covers.openlibrary.org/b/isbn/${encodeURIComponent(book.isbn)}-S.jpg`,
+          ]
+        : [];
+      const coverOptions = Array.isArray(book.coverOptions)
+        ? uniqueCoverUrls(book.coverOptions, [book.cover || ""], isbnCoverFallbacks)
+        : uniqueCoverUrls([book.cover || ""], isbnCoverFallbacks);
+      const primaryCover = coverOptions[0] || "";
+      const placeholderMarkup = `<div class="book-cover-fallback"${primaryCover ? " hidden" : ""}><span>${escapeHtml(
+        book.title.slice(0, 32)
+      )}</span></div>`;
+      const coverMarkup = primaryCover
         ? `
           <div class="book-cover">
-            <img src="${escapeHtml(book.cover)}" alt="Cover of ${escapeHtml(book.title)}" loading="lazy" />
+            <img
+              src="${escapeHtml(primaryCover)}"
+              alt="Cover of ${escapeHtml(book.title)}"
+              loading="lazy"
+              data-cover-list="${escapeHtml(JSON.stringify(coverOptions))}"
+              data-cover-index="0"
+            />
+            ${placeholderMarkup}
           </div>
         `
         : `
-          <div class="book-cover-placeholder">
-            <span>${escapeHtml(book.title.slice(0, 32))}</span>
+          <div class="book-cover">
+            ${placeholderMarkup}
           </div>
         `;
 
@@ -827,6 +870,37 @@ function onLibraryAction(event) {
   saveLibrary();
   renderLibrary();
   setStatus("The book was removed from Your Library.", "info");
+}
+
+function onLibraryImageError(event) {
+  const image = event.target;
+  if (!(image instanceof HTMLImageElement)) {
+    return;
+  }
+
+  const coverListRaw = image.dataset.coverList || "[]";
+  let coverList = [];
+
+  try {
+    coverList = JSON.parse(coverListRaw);
+  } catch (error) {
+    console.error(error);
+  }
+
+  const currentIndex = Number(image.dataset.coverIndex || "0");
+  const nextIndex = currentIndex + 1;
+
+  if (Array.isArray(coverList) && nextIndex < coverList.length) {
+    image.dataset.coverIndex = String(nextIndex);
+    image.src = coverList[nextIndex];
+    return;
+  }
+
+  image.hidden = true;
+  const fallback = image.nextElementSibling;
+  if (fallback instanceof HTMLElement) {
+    fallback.hidden = false;
+  }
 }
 
 function clearLibrary() {
@@ -1065,6 +1139,29 @@ function isValidIsbn10(isbn) {
 
 function normalizeCoverUrl(url) {
   return url ? url.replace(/^http:\/\//i, "https://") : "";
+}
+
+function uniqueCoverUrls(...groups) {
+  const seen = new Set();
+  const results = [];
+
+  for (const group of groups) {
+    for (const url of group || []) {
+      const normalized = normalizeCoverUrl(String(url || "").trim());
+      if (!normalized || seen.has(normalized)) {
+        continue;
+      }
+
+      seen.add(normalized);
+      results.push(normalized);
+    }
+  }
+
+  return results;
+}
+
+function pickFirstCoverUrl(...groups) {
+  return uniqueCoverUrls(...groups)[0] || "";
 }
 
 function formatDate(value) {

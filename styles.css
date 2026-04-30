@@ -442,14 +442,14 @@ h2 {
   border: 1px solid rgba(111, 78, 48, 0.1);
 }
 
-.book-cover,
-.book-cover-placeholder {
+.book-cover {
   width: 92px;
   height: 136px;
   border-radius: 14px;
   overflow: hidden;
   background: linear-gradient(135deg, #d8b693, #9b684b);
   box-shadow: 0 14px 24px rgba(78, 50, 31, 0.18);
+  position: relative;
 }
 
 .book-cover img {
@@ -459,7 +459,9 @@ h2 {
   display: block;
 }
 
-.book-cover-placeholder {
+.book-cover-fallback {
+  position: absolute;
+  inset: 0;
   display: grid;
   place-items: end start;
   padding: 12px;
@@ -467,6 +469,10 @@ h2 {
   font-family: "Cormorant Garamond", serif;
   font-size: 1.2rem;
   line-height: 1.05;
+}
+
+.book-cover-fallback[hidden] {
+  display: none;
 }
 
 .book-title {
@@ -558,8 +564,7 @@ h2 {
     grid-template-columns: 1fr;
   }
 
-  .book-cover,
-  .book-cover-placeholder {
+  .book-cover {
     width: 100%;
     max-width: 140px;
     height: 200px;
