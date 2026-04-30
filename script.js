@@ -257,11 +257,13 @@ async function onManualSubmit(event) {
 }
 
 async function handleDetectedBarcode(rawValue) {
-  const isbn = extractIsbn(rawValue);
-  if (!isbn) {
+  const isbnMatch = resolveIsbn(rawValue);
+  if (!isbnMatch) {
     setStatus("That barcode does not look like a book ISBN. Try another barcode.", "warning");
     return;
   }
+
+  const { isbn, correctedFrom } = isbnMatch;
 
   const now = Date.now();
   if (state.lookupInProgress || (isbn === state.lastIsbn && now - state.lastIsbnAt < 4000)) {
@@ -271,7 +273,10 @@ async function handleDetectedBarcode(rawValue) {
   state.lookupInProgress = true;
   state.lastIsbn = isbn;
   state.lastIsbnAt = now;
-  setStatus(`Looking up book information for ISBN ${isbn}...`, "info");
+  const lookupMessage = correctedFrom
+    ? `Read a close barcode match and corrected it to ISBN ${isbn}. Looking up the book now...`
+    : `Looking up book information for ISBN ${isbn}...`;
+  setStatus(lookupMessage, "info");
 
   try {
     const existingBook = state.library.find((book) => book.isbn === isbn);
@@ -753,6 +758,138 @@ function extractIsbn(rawValue) {
   }
 
   return null;
+}
+
+function resolveIsbn(rawValue) {
+  const candidates = getIsbnCandidates(rawValue);
+
+  for (const candidate of candidates) {
+    if (candidate.kind === "isbn13" && isValidIsbn13(candidate.value)) {
+      return { isbn: candidate.value };
+    }
+
+    if (candidate.kind === "isbn10" && isValidIsbn10(candidate.value)) {
+      return { isbn: candidate.value };
+    }
+  }
+
+  for (const candidate of candidates) {
+    if (candidate.kind.startsWith("isbn13")) {
+      const corrected = correctIsbn13(candidate.value);
+      if (corrected) {
+        return { isbn: corrected, correctedFrom: candidate.value };
+      }
+    }
+
+    if (candidate.kind.startsWith("isbn10")) {
+      const corrected = correctIsbn10(candidate.value);
+      if (corrected) {
+        return { isbn: corrected, correctedFrom: candidate.value };
+      }
+    }
+  }
+
+  return null;
+}
+
+function getIsbnCandidates(rawValue) {
+  const value = String(rawValue || "")
+    .toUpperCase()
+    .replace(/[^0-9X]/g, "");
+  const seen = new Set();
+  const candidates = [];
+
+  const pushCandidate = (candidate, kind) => {
+    if (!candidate || seen.has(`${kind}:${candidate}`)) {
+      return;
+    }
+
+    seen.add(`${kind}:${candidate}`);
+    candidates.push({ value: candidate, kind });
+  };
+
+  if (value.length === 13) {
+    pushCandidate(value, "isbn13");
+  }
+
+  if (value.length === 10) {
+    pushCandidate(value, "isbn10");
+  }
+
+  const isbn13Matches = value.match(/97[89][0-9]{10}/g) || [];
+  for (const candidate of isbn13Matches) {
+    pushCandidate(candidate, "isbn13");
+  }
+
+  const isbn10Matches = value.match(/[0-9]{9}[0-9X]/g) || [];
+  for (const candidate of isbn10Matches) {
+    pushCandidate(candidate, "isbn10");
+  }
+
+  const bookland12Matches = value.match(/97[89][0-9]{9}/g) || [];
+  for (const candidate of bookland12Matches) {
+    pushCandidate(candidate, "isbn13-partial");
+  }
+
+  const isbn9Matches = value.match(/[0-9]{9}/g) || [];
+  for (const candidate of isbn9Matches) {
+    pushCandidate(candidate, "isbn10-partial");
+  }
+
+  return candidates;
+}
+
+function correctIsbn13(value) {
+  const digits = String(value || "").replace(/\D/g, "");
+
+  if (/^(978|979)\d{10}$/.test(digits)) {
+    return digits.slice(0, 12) + computeIsbn13CheckDigit(digits.slice(0, 12));
+  }
+
+  if (/^(978|979)\d{9}$/.test(digits)) {
+    return digits + computeIsbn13CheckDigit(digits);
+  }
+
+  return null;
+}
+
+function correctIsbn10(value) {
+  const isbn = String(value || "").toUpperCase();
+
+  if (/^\d{9}[\dX]$/.test(isbn)) {
+    return isbn.slice(0, 9) + computeIsbn10CheckDigit(isbn.slice(0, 9));
+  }
+
+  if (/^\d{9}$/.test(isbn)) {
+    return isbn + computeIsbn10CheckDigit(isbn);
+  }
+
+  return null;
+}
+
+function computeIsbn13CheckDigit(firstTwelveDigits) {
+  const total = firstTwelveDigits
+    .split("")
+    .reduce((sum, digit, index) => sum + Number(digit) * (index % 2 === 0 ? 1 : 3), 0);
+
+  return String((10 - (total % 10)) % 10);
+}
+
+function computeIsbn10CheckDigit(firstNineDigits) {
+  const total = firstNineDigits
+    .split("")
+    .reduce((sum, digit, index) => sum + Number(digit) * (10 - index), 0);
+  const remainder = 11 - (total % 11);
+
+  if (remainder === 10) {
+    return "X";
+  }
+
+  if (remainder === 11) {
+    return "0";
+  }
+
+  return String(remainder % 11);
 }
 
 function isValidIsbn13(isbn) {
