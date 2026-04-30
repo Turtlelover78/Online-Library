@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Your Library</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;700;800&family=Cormorant+Garamond:wght@600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="hero">
+        <div class="hero-copy">
+          <p class="eyebrow">Personal Book Scanner</p>
+          <h1>Your Library</h1>
+          <p class="hero-text">
+            Scan a book barcode, look up the title and author automatically,
+            and build your own digital shelf in seconds.
+          </p>
+        </div>
+        <div class="hero-card">
+          <p class="hero-card-label">How it works</p>
+          <ol>
+            <li>Scan a barcode with your camera or upload a photo.</li>
+            <li>The app finds the book information automatically.</li>
+            <li>Your Library saves every scanned book on this device.</li>
+          </ol>
+        </div>
+      </header>
+
+      <main class="app-grid">
+        <section class="panel scanner-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="section-kicker">Scanner</p>
+              <h2>Add a Book</h2>
+            </div>
+            <div class="panel-actions">
+              <button id="startScannerBtn" class="btn btn-primary" type="button">
+                Start Camera Scan
+              </button>
+              <button id="stopScannerBtn" class="btn btn-secondary" type="button" disabled>
+                Stop
+              </button>
+            </div>
+          </div>
+
+          <div class="scanner-frame">
+            <video id="scannerVideo" autoplay muted playsinline></video>
+            <div class="scanner-overlay" aria-hidden="true">
+              <span></span>
+            </div>
+            <div id="scannerPlaceholder" class="scanner-placeholder">
+              <p>Camera preview will appear here.</p>
+              <p class="scanner-tip">Tip: hold the ISBN barcode steady inside the frame.</p>
+            </div>
+          </div>
+
+          <canvas id="scannerCanvas" hidden></canvas>
+
+          <div id="statusMessage" class="status status-info" role="status">
+            Ready. You can start the camera, upload a barcode image, or type an ISBN manually.
+          </div>
+
+          <div class="input-grid">
+            <label class="field-card" for="barcodeImageInput">
+              <span class="field-label">Upload a barcode photo</span>
+              <input id="barcodeImageInput" type="file" accept="image/*" capture="environment" />
+              <span class="field-help">Useful when live camera scanning is unavailable.</span>
+            </label>
+
+            <form id="manualIsbnForm" class="field-card">
+              <label class="field-label" for="manualIsbnInput">Or enter an ISBN</label>
+              <div class="manual-entry">
+                <input
+                  id="manualIsbnInput"
+                  name="isbn"
+                  type="text"
+                  inputmode="numeric"
+                  placeholder="9780140328721"
+                  autocomplete="off"
+                />
+                <button class="btn btn-primary" type="submit">Add Book</button>
+              </div>
+              <span class="field-help">Works with ISBN-10 and ISBN-13.</span>
+            </form>
+          </div>
+
+          <div class="support-note" id="supportNote">
+            Live camera scanning works best in Chrome or Edge on <code>http://localhost</code> or
+            <code>https</code>.
+          </div>
+        </section>
+
+        <section class="panel library-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="section-kicker">Collection</p>
+              <h2>Your Books</h2>
+            </div>
+            <div class="library-tools">
+              <div class="library-stat">
+                <span id="bookCount">0</span>
+                <small>books saved</small>
+              </div>
+              <button id="clearLibraryBtn" class="btn btn-ghost" type="button">
+                Clear Library
+              </button>
+            </div>
+          </div>
+
+          <div id="libraryGrid" class="library-grid"></div>
+        </section>
+      </main>
+    </div>
+
+    <script src="./script.js"></script>
+  </body>
+</html>
