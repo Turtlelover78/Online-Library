@@ -44,17 +44,24 @@
               <button id="startScannerBtn" class="btn btn-primary" type="button">
                 Scan Barcode
               </button>
+              <button id="capturePhotoBtn" class="btn btn-secondary" type="button" hidden>
+                Take Picture
+              </button>
+              <button id="cancelCameraBtn" class="btn btn-ghost" type="button" hidden>
+                Cancel
+              </button>
             </div>
           </div>
 
           <div class="scanner-frame">
+            <video id="scannerVideo" autoplay muted playsinline hidden></video>
             <img id="scannerPreview" alt="Captured barcode preview" hidden />
             <div class="scanner-overlay" aria-hidden="true">
               <span></span>
             </div>
             <div id="scannerPlaceholder" class="scanner-placeholder">
               <p>Tap the button above to open your camera.</p>
-              <p class="scanner-tip">Take a clear picture of the barcode on the back of the book.</p>
+              <p class="scanner-tip">Line the barcode up with the glowing center bar for the best results.</p>
             </div>
           </div>
 
