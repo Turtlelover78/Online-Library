@@ -234,6 +234,12 @@ function syncSearchInputs() {
   elements.authorSearchInput.value = state.authorQuery;
 }
 
+function clearSearchFilters() {
+  state.titleQuery = "";
+  state.authorQuery = "";
+  syncSearchInputs();
+}
+
 function updateLibraryModeUi() {
   const currentLibrary = getCurrentLibraryEntry();
   const inSharedMode = currentLibrary?.type === "shared" && Boolean(currentLibrary.code);
@@ -790,12 +796,14 @@ async function handleDetectedBarcode(rawValue) {
   setStatus(lookupMessage, "info");
 
   try {
+    const currentLibraryName = getCurrentLibraryEntry()?.name || "Your Library";
     const existingBook = getActiveBooks().find((book) => book.isbn === isbn);
     if (existingBook) {
       existingBook.scannedAt = new Date().toISOString();
       await saveActiveLibrary(existingBook);
+      clearSearchFilters();
       renderLibrary();
-      setStatus(`"${existingBook.title}" is already in Your Library. Its scan time was refreshed.`, "success");
+      setStatus(`"${existingBook.title}" is already in ${currentLibraryName}. Its scan time was refreshed.`, "success");
       return true;
     }
 
@@ -812,8 +820,9 @@ async function handleDetectedBarcode(rawValue) {
       description: book.description,
       scannedAt: new Date().toISOString(),
     });
+    clearSearchFilters();
     renderLibrary();
-    setStatus(`Added "${book.title}" by ${book.authors.join(", ")} to Your Library.`, "success");
+    setStatus(`Added "${book.title}" by ${book.authors.join(", ")} to ${currentLibraryName}.`, "success");
     return true;
   } catch (error) {
     console.error(error);
