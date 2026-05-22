@@ -1330,9 +1330,8 @@ function onLibraryImageError(event) {
 }
 
 function getActiveBooks() {
-  return state.activeLibraryType === "shared"
-    ? Array.from(state.sharedBooksMap.values())
-    : state.library;
+  const currentLibrary = getCurrentLibraryEntry();
+  return currentLibrary?.type === "shared" ? Array.from(state.sharedBooksMap.values()) : state.library;
 }
 
 function getSortedBooks(books) {
@@ -1350,12 +1349,17 @@ function filterBooks(books) {
 
 async function addBookToActiveLibrary(book) {
   const normalizedBook = normalizeSharedBook(book, book.id);
+  const currentLibrary = getCurrentLibraryEntry();
 
-  if (state.activeLibraryType === "shared" && state.activeSharedCode && state.gun) {
+  if (currentLibrary?.type === "shared") {
+    if (!currentLibrary.code || !state.gun) {
+      throw new Error("Shared library is not ready.");
+    }
+
     state.sharedBooksMap.set(normalizedBook.id, normalizedBook);
     state.gun
       .get(SHARED_LIBRARY_ROOT)
-      .get(state.activeSharedCode)
+      .get(currentLibrary.code)
       .get("books")
       .get(normalizedBook.id)
       .put(normalizedBook);
@@ -1367,13 +1371,19 @@ async function addBookToActiveLibrary(book) {
 }
 
 async function saveActiveLibrary(updatedBook = null) {
-  if (state.activeLibraryType === "shared" && state.activeSharedCode && state.gun) {
+  const currentLibrary = getCurrentLibraryEntry();
+
+  if (currentLibrary?.type === "shared") {
+    if (!currentLibrary.code || !state.gun) {
+      throw new Error("Shared library is not ready.");
+    }
+
     if (updatedBook?.id) {
       const normalizedBook = normalizeSharedBook(updatedBook, updatedBook.id);
       state.sharedBooksMap.set(normalizedBook.id, normalizedBook);
       state.gun
         .get(SHARED_LIBRARY_ROOT)
-        .get(state.activeSharedCode)
+        .get(currentLibrary.code)
         .get("books")
         .get(normalizedBook.id)
         .put(normalizedBook);
@@ -1385,9 +1395,16 @@ async function saveActiveLibrary(updatedBook = null) {
 }
 
 function removeBookFromActiveLibrary(bookId) {
-  if (state.activeLibraryType === "shared" && state.activeSharedCode && state.gun) {
+  const currentLibrary = getCurrentLibraryEntry();
+
+  if (currentLibrary?.type === "shared") {
+    if (!currentLibrary.code || !state.gun) {
+      setStatus("That shared library is not ready right now. Try reopening it and then remove the book again.", "error");
+      return;
+    }
+
     state.sharedBooksMap.delete(bookId);
-    state.gun.get(SHARED_LIBRARY_ROOT).get(state.activeSharedCode).get("books").get(bookId).put(null);
+    state.gun.get(SHARED_LIBRARY_ROOT).get(currentLibrary.code).get("books").get(bookId).put(null);
   } else {
     state.library = state.library.filter((book) => book.id !== bookId);
     saveLibrary();
@@ -1398,9 +1415,16 @@ function removeBookFromActiveLibrary(bookId) {
 }
 
 function clearActiveLibrary() {
-  if (state.activeLibraryType === "shared" && state.activeSharedCode && state.gun) {
+  const currentLibrary = getCurrentLibraryEntry();
+
+  if (currentLibrary?.type === "shared") {
+    if (!currentLibrary.code || !state.gun) {
+      setStatus("That shared library is not ready right now. Try reopening it and then clear it again.", "error");
+      return;
+    }
+
     for (const book of getActiveBooks()) {
-      state.gun.get(SHARED_LIBRARY_ROOT).get(state.activeSharedCode).get("books").get(book.id).put(null);
+      state.gun.get(SHARED_LIBRARY_ROOT).get(currentLibrary.code).get("books").get(book.id).put(null);
     }
     state.sharedBooksMap = new Map();
   } else {
