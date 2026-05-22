@@ -815,6 +815,11 @@ async function handleDetectedBarcode(rawValue) {
     setStatus(`Added "${book.title}" by ${book.authors.join(", ")} to Your Library.`, "success");
   } catch (error) {
     console.error(error);
+    if (error instanceof Error && error.message === "Shared library is not ready.") {
+      setStatus("The selected shared library is not ready yet. Open that library once, then try scanning again.", "error");
+      return;
+    }
+
     setStatus(
       "The barcode was read, but the book information could not be found. You can try again or enter a different ISBN.",
       "error"
