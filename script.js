@@ -30,6 +30,7 @@ const state = {
   titleQuery: "",
   authorQuery: "",
   gun: null,
+  connectedSharedLibraryId: "",
   sharedBooksMap: new Map(),
   sharedSessionId: 0,
 };
@@ -1911,6 +1912,7 @@ function activateLibrary(libraryId, options = {}) {
     return;
   }
 
+  const wasSameLibrary = state.activeLibraryId === libraryEntry.id;
   state.activeLibraryId = libraryEntry.id;
   syncDerivedLibraryState();
 
@@ -1919,8 +1921,25 @@ function activateLibrary(libraryId, options = {}) {
   }
 
   if (libraryEntry.type === "shared") {
+    const shouldReuseExistingConnection =
+      wasSameLibrary &&
+      state.connectedSharedLibraryId === libraryEntry.id &&
+      !options.created &&
+      !options.joined &&
+      !options.restoring &&
+      !options.forceReconnect;
+
+    if (shouldReuseExistingConnection) {
+      persistAppState();
+      updateLibraryModeUi();
+      updatePageUi();
+      renderLibrary();
+      return;
+    }
+
     connectToSharedLibrary(libraryEntry, options);
   } else {
+    state.connectedSharedLibraryId = "";
     state.sharedBooksMap = new Map();
     state.sharedSessionId += 1;
     persistAppState();
@@ -1953,6 +1972,7 @@ function connectToSharedLibrary(libraryEntry, options = {}) {
 
   const sessionId = state.sharedSessionId + 1;
   state.sharedSessionId = sessionId;
+  state.connectedSharedLibraryId = libraryEntry.id;
   state.sharedBooksMap = new Map();
   syncDerivedLibraryState();
   elements.inviteCodeInput.value = formatInviteCode(libraryEntry.code);
