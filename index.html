@@ -33,12 +33,33 @@
         </div>
       </header>
 
-      <main class="app-grid">
-        <section class="panel scanner-panel">
+      <main class="workspace-shell">
+        <aside class="sidebar panel">
+          <div class="sidebar-section">
+            <p class="section-kicker">Navigate</p>
+            <button id="scannerNavBtn" class="sidebar-link is-active" type="button">
+              Scanner
+            </button>
+          </div>
+
+          <div class="sidebar-section">
+            <div class="sidebar-heading-row">
+              <p class="section-kicker">Libraries</p>
+              <button id="openCreateSharedModalBtn" class="sidebar-mini-btn" type="button">
+                New
+              </button>
+            </div>
+            <div id="librarySwitcherList" class="library-switcher-list"></div>
+          </div>
+        </aside>
+
+        <div class="content-stack">
+        <section id="scannerPage" class="panel scanner-panel">
           <div class="panel-heading">
             <div>
               <p class="section-kicker">Scanner</p>
               <h2>Add a Book</h2>
+              <p id="scannerTargetLabel" class="library-mode-label">Scanning into Private Library</p>
             </div>
             <div class="panel-actions">
               <button id="startScannerBtn" class="btn btn-primary" type="button">
@@ -96,11 +117,12 @@
           </div>
         </section>
 
-        <section class="panel library-panel">
+        <section id="libraryPage" class="panel library-panel" hidden>
           <div class="panel-heading">
             <div>
               <p class="section-kicker">Collection</p>
               <h2>Your Books</h2>
+              <p id="libraryModeLabel" class="library-mode-label">Private library on this device</p>
             </div>
             <div class="library-tools">
               <div class="library-stat">
@@ -113,12 +135,79 @@
             </div>
           </div>
 
+          <div class="library-controls">
+            <div class="library-mode-actions">
+              <button id="privateLibraryBtn" class="btn btn-secondary" type="button">
+                Private Library
+              </button>
+              <button id="createSharedLibraryBtn" class="btn btn-primary" type="button">
+                Create Shared Library
+              </button>
+              <button id="leaveSharedLibraryBtn" class="btn btn-ghost" type="button" hidden>
+                Leave Shared Library
+              </button>
+            </div>
+
+            <div class="shared-library-card">
+              <label class="field-label" for="inviteCodeInput">Enter invite code</label>
+              <div class="shared-library-row">
+                <input id="inviteCodeInput" type="text" placeholder="ABCD-1234" autocomplete="off" />
+                <button id="joinSharedLibraryBtn" class="btn btn-secondary" type="button">
+                  Join
+                </button>
+              </div>
+              <div id="sharedCodeSection" class="shared-code-section" hidden>
+                <span class="shared-code-label">Invite code</span>
+                <div class="shared-library-row">
+                  <input id="sharedCodeDisplay" type="text" readonly />
+                  <button id="copyInviteCodeBtn" class="btn btn-secondary" type="button">
+                    Copy
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div class="library-search">
+              <div class="search-field search-field-large">
+                <label class="field-label" for="titleSearchInput">Search by title</label>
+                <input id="titleSearchInput" type="search" placeholder="Search book title" autocomplete="off" />
+              </div>
+              <div class="search-field search-field-small">
+                <label class="field-label" for="authorSearchInput">Search by author</label>
+                <input id="authorSearchInput" type="search" placeholder="Search author" autocomplete="off" />
+              </div>
+            </div>
+          </div>
+
           <div id="libraryGrid" class="library-grid"></div>
         </section>
+        </div>
       </main>
     </div>
 
+    <div id="libraryNameModal" class="modal-backdrop" hidden>
+      <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="libraryNameModalTitle">
+        <div class="modal-header">
+          <p class="section-kicker">Shared Library</p>
+          <h2 id="libraryNameModalTitle">Name Your Library</h2>
+        </div>
+        <p class="modal-copy">
+          Shared libraries need a name so people know which shelf they are joining.
+        </p>
+        <form id="libraryNameForm" class="modal-form">
+          <label class="field-label" for="libraryNameInput">Library name</label>
+          <input id="libraryNameInput" type="text" maxlength="60" placeholder="Family Bookshelf" autocomplete="off" />
+          <div class="modal-actions">
+            <button id="cancelLibraryNameBtn" class="btn btn-ghost" type="button">Cancel</button>
+            <button class="btn btn-primary" type="submit">Create Shared Library</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
     <script src="https://cdn.jsdelivr.net/npm/@ericblade/quagga2@1.8.4/dist/quagga.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/gun/gun.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/gun/lib/rindexed.js"></script>
     <script src="./script.js"></script>
   </body>
 </html>

@@ -1,5 +1,10 @@
 const STORAGE_KEY = "your-library-books";
+const APP_STATE_KEY = "your-library-app-state";
 const MAX_SCAN_DIMENSION = 1800;
+const SHARED_LIBRARY_ROOT = "your-library-shared";
+const GUN_PEERS = ["https://gun-manhattan.herokuapp.com/gun"];
+const savedAppState = loadAppState();
+const initialLibraries = normalizeSavedLibraries(savedAppState.libraries);
 
 const state = {
   detector: null,
@@ -14,6 +19,19 @@ const state = {
   liveDetectedValue: "",
   liveDetectedCount: 0,
   liveLastSeenAt: 0,
+  activeLibraryType: savedAppState.activeLibraryType === "shared" ? "shared" : "private",
+  activeSharedCode: savedAppState.activeSharedCode || "",
+  libraries: initialLibraries,
+  activeLibraryId:
+    savedAppState.activeLibraryId && initialLibraries.some((library) => library.id === savedAppState.activeLibraryId)
+      ? savedAppState.activeLibraryId
+      : "private-local",
+  activePage: savedAppState.activePage === "library" ? "library" : "scanner",
+  titleQuery: "",
+  authorQuery: "",
+  gun: null,
+  sharedBooksMap: new Map(),
+  sharedSessionId: 0,
 };
 
 const elements = {
@@ -21,6 +39,8 @@ const elements = {
   preview: document.getElementById("scannerPreview"),
   placeholder: document.getElementById("scannerPlaceholder"),
   status: document.getElementById("statusMessage"),
+  scannerPage: document.getElementById("scannerPage"),
+  libraryPage: document.getElementById("libraryPage"),
   startBtn: document.getElementById("startScannerBtn"),
   cancelBtn: document.getElementById("cancelCameraBtn"),
   imageInput: document.getElementById("barcodeImageInput"),
@@ -29,14 +49,44 @@ const elements = {
   libraryGrid: document.getElementById("libraryGrid"),
   bookCount: document.getElementById("bookCount"),
   clearLibraryBtn: document.getElementById("clearLibraryBtn"),
+  libraryModeLabel: document.getElementById("libraryModeLabel"),
+  privateLibraryBtn: document.getElementById("privateLibraryBtn"),
+  createSharedLibraryBtn: document.getElementById("createSharedLibraryBtn"),
+  leaveSharedLibraryBtn: document.getElementById("leaveSharedLibraryBtn"),
+  inviteCodeInput: document.getElementById("inviteCodeInput"),
+  joinSharedLibraryBtn: document.getElementById("joinSharedLibraryBtn"),
+  sharedCodeSection: document.getElementById("sharedCodeSection"),
+  sharedCodeDisplay: document.getElementById("sharedCodeDisplay"),
+  copyInviteCodeBtn: document.getElementById("copyInviteCodeBtn"),
+  titleSearchInput: document.getElementById("titleSearchInput"),
+  authorSearchInput: document.getElementById("authorSearchInput"),
+  scannerNavBtn: document.getElementById("scannerNavBtn"),
+  librarySwitcherList: document.getElementById("librarySwitcherList"),
+  scannerTargetLabel: document.getElementById("scannerTargetLabel"),
+  openCreateSharedModalBtn: document.getElementById("openCreateSharedModalBtn"),
+  libraryNameModal: document.getElementById("libraryNameModal"),
+  libraryNameForm: document.getElementById("libraryNameForm"),
+  libraryNameInput: document.getElementById("libraryNameInput"),
+  cancelLibraryNameBtn: document.getElementById("cancelLibraryNameBtn"),
 };
 
 initialize();
 
 async function initialize() {
-  renderLibrary();
+  elements.libraryNameModal.hidden = true;
+  initializeSharedDatabase();
+  syncDerivedLibraryState();
+  renderLibrarySwitcher();
+  updateLibraryModeUi();
+  updatePageUi();
+  syncSearchInputs();
   wireEvents();
   await setupDetector();
+  if (state.activeLibraryType === "shared" && state.activeSharedCode && getCurrentLibraryEntry()) {
+    connectToSharedLibrary(getCurrentLibraryEntry(), { restoring: true });
+  } else {
+    renderLibrary();
+  }
 }
 
 function wireEvents() {
@@ -47,6 +97,19 @@ function wireEvents() {
   elements.clearLibraryBtn.addEventListener("click", clearLibrary);
   elements.libraryGrid.addEventListener("click", onLibraryAction);
   elements.libraryGrid.addEventListener("error", onLibraryImageError, true);
+  elements.privateLibraryBtn.addEventListener("click", switchToPrivateLibrary);
+  elements.createSharedLibraryBtn.addEventListener("click", openCreateSharedLibraryModal);
+  elements.leaveSharedLibraryBtn.addEventListener("click", leaveCurrentSharedLibrary);
+  elements.joinSharedLibraryBtn.addEventListener("click", onJoinSharedLibrary);
+  elements.copyInviteCodeBtn.addEventListener("click", copyInviteCode);
+  elements.titleSearchInput.addEventListener("input", onSearchChanged);
+  elements.authorSearchInput.addEventListener("input", onSearchChanged);
+  elements.scannerNavBtn.addEventListener("click", () => setActivePage("scanner"));
+  elements.librarySwitcherList.addEventListener("click", onLibrarySwitcherClick);
+  elements.openCreateSharedModalBtn.addEventListener("click", openCreateSharedLibraryModal);
+  elements.libraryNameForm.addEventListener("submit", onCreateSharedLibrarySubmit);
+  elements.cancelLibraryNameBtn.addEventListener("click", closeCreateSharedLibraryModal);
+  elements.libraryNameModal.addEventListener("click", onLibraryModalBackdropClick);
   window.addEventListener("beforeunload", stopCamera);
 }
 
@@ -82,6 +145,137 @@ async function setupDetector() {
   );
   elements.startBtn.disabled = true;
   elements.imageInput.disabled = true;
+}
+
+function initializeSharedDatabase() {
+  if (typeof window.Gun !== "function") {
+    return;
+  }
+
+  state.gun = window.Gun({
+    peers: GUN_PEERS,
+    file: "your-library-browser-data",
+  });
+}
+
+function normalizeSavedLibraries(savedLibraries) {
+  const libraries = Array.isArray(savedLibraries) ? savedLibraries : [];
+  const seen = new Set();
+  const normalized = libraries
+    .map((library) => normalizeLibraryEntry(library))
+    .filter((library) => {
+      if (!library || seen.has(library.id)) {
+        return false;
+      }
+
+      seen.add(library.id);
+      return true;
+    });
+
+  if (!normalized.some((library) => library.id === "private-local")) {
+    normalized.unshift({
+      id: "private-local",
+      type: "private",
+      name: "Private Library",
+    });
+  }
+
+  return normalized;
+}
+
+function normalizeLibraryEntry(library) {
+  if (!library || typeof library !== "object") {
+    return null;
+  }
+
+  if (library.type === "private") {
+    return {
+      id: "private-local",
+      type: "private",
+      name: library.name || "Private Library",
+    };
+  }
+
+  if (library.type === "shared" && library.code) {
+    const normalizedCode = normalizeInviteCode(library.code);
+    if (!normalizedCode) {
+      return null;
+    }
+
+    return {
+      id: `shared-${normalizedCode}`,
+      type: "shared",
+      code: normalizedCode,
+      name: library.name || `Shared Library ${formatInviteCode(normalizedCode)}`,
+    };
+  }
+
+  return null;
+}
+
+function getCurrentLibraryEntry() {
+  return state.libraries.find((library) => library.id === state.activeLibraryId) || state.libraries[0] || null;
+}
+
+function syncDerivedLibraryState() {
+  const currentLibrary = getCurrentLibraryEntry();
+  if (!currentLibrary) {
+    return;
+  }
+
+  state.activeLibraryId = currentLibrary.id;
+  state.activeLibraryType = currentLibrary.type;
+  state.activeSharedCode = currentLibrary.type === "shared" ? currentLibrary.code : "";
+}
+
+function syncSearchInputs() {
+  elements.titleSearchInput.value = state.titleQuery;
+  elements.authorSearchInput.value = state.authorQuery;
+}
+
+function updateLibraryModeUi() {
+  const currentLibrary = getCurrentLibraryEntry();
+  const inSharedMode = currentLibrary?.type === "shared" && Boolean(currentLibrary.code);
+  elements.leaveSharedLibraryBtn.hidden = !inSharedMode;
+  elements.sharedCodeSection.hidden = !inSharedMode;
+  elements.privateLibraryBtn.disabled = !inSharedMode;
+  elements.sharedCodeDisplay.value = inSharedMode ? formatInviteCode(currentLibrary.code) : "";
+  elements.libraryModeLabel.textContent = inSharedMode
+    ? `${currentLibrary.name} • code ${formatInviteCode(currentLibrary.code)}`
+    : `${currentLibrary?.name || "Private Library"} on this device`;
+  elements.scannerTargetLabel.textContent = `Scanning into ${currentLibrary?.name || "Private Library"}`;
+}
+
+function updatePageUi() {
+  const onScannerPage = state.activePage === "scanner";
+  elements.scannerPage.hidden = !onScannerPage;
+  elements.libraryPage.hidden = onScannerPage;
+  elements.scannerNavBtn.classList.toggle("is-active", onScannerPage);
+  renderLibrarySwitcher();
+}
+
+function renderLibrarySwitcher() {
+  const currentId = state.activeLibraryId;
+  const currentPage = state.activePage;
+
+  elements.librarySwitcherList.innerHTML = state.libraries
+    .map((library) => {
+      const isActive = currentPage === "library" && library.id === currentId;
+      const meta =
+        library.type === "shared"
+          ? `${library.name} • ${formatInviteCode(library.code)}`
+          : `${library.name} • local`;
+
+      return `
+        <button class="library-switcher-item${isActive ? " is-active" : ""}" type="button" data-library-id="${escapeHtml(
+          library.id
+        )}">
+          <span class="library-switcher-name">${escapeHtml(library.name)}</span>
+          <span class="library-switcher-meta">${escapeHtml(meta)}</span>
+        </button>
+      `;
+    })
+    .join("");
 }
 
 async function startScanner() {
@@ -186,6 +380,233 @@ function stopCamera() {
   if (elements.preview.hidden) {
     elements.placeholder.hidden = false;
   }
+}
+
+function onSearchChanged() {
+  state.titleQuery = elements.titleSearchInput.value.trim().toLowerCase();
+  state.authorQuery = elements.authorSearchInput.value.trim().toLowerCase();
+  renderLibrary();
+}
+
+function onJoinSharedLibrary() {
+  const normalizedCode = normalizeInviteCode(elements.inviteCodeInput.value);
+  if (!normalizedCode) {
+    setStatus("Enter a valid invite code first.", "warning");
+    return;
+  }
+
+  const existingLibrary = state.libraries.find((library) => library.type === "shared" && library.code === normalizedCode);
+  if (existingLibrary) {
+    activateLibrary(existingLibrary.id, { switchPage: true, restoring: false });
+    setStatus(`Opened ${existingLibrary.name}.`, "success");
+    return;
+  }
+
+  const libraryEntry = {
+    id: `shared-${normalizedCode}`,
+    type: "shared",
+    code: normalizedCode,
+    name: `Shared Library ${formatInviteCode(normalizedCode)}`,
+  };
+
+  state.libraries.push(libraryEntry);
+  activateLibrary(libraryEntry.id, { switchPage: true, restoring: false, joined: true });
+}
+
+function switchToPrivateLibrary() {
+  activateLibrary("private-local", { switchPage: true });
+  setStatus("Switched back to your private library on this device.", "info");
+}
+
+function leaveCurrentSharedLibrary() {
+  const currentLibrary = getCurrentLibraryEntry();
+  if (!currentLibrary || currentLibrary.type !== "shared") {
+    return;
+  }
+
+  state.libraries = state.libraries.filter((library) => library.id !== currentLibrary.id);
+  state.sharedBooksMap = new Map();
+  state.sharedSessionId += 1;
+  activateLibrary("private-local", { switchPage: true, silentStatus: true });
+  setStatus(`Removed ${currentLibrary.name} from your sidebar.`, "info");
+}
+
+function openCreateSharedLibraryModal() {
+  if (!state.gun) {
+    setStatus("Shared libraries are unavailable right now because the sync service did not load.", "error");
+    return;
+  }
+
+  elements.libraryNameInput.value = "";
+  elements.libraryNameModal.hidden = false;
+  window.setTimeout(() => {
+    elements.libraryNameInput.focus();
+  }, 0);
+}
+
+function closeCreateSharedLibraryModal() {
+  elements.libraryNameModal.hidden = true;
+}
+
+function onLibraryModalBackdropClick(event) {
+  if (event.target === elements.libraryNameModal) {
+    closeCreateSharedLibraryModal();
+  }
+}
+
+function onCreateSharedLibrarySubmit(event) {
+  event.preventDefault();
+  const libraryName = elements.libraryNameInput.value.trim();
+  if (!libraryName) {
+    elements.libraryNameInput.focus();
+    setStatus("Shared libraries need a name before they can be created.", "warning");
+    return;
+  }
+
+  createSharedLibrary(libraryName);
+  closeCreateSharedLibraryModal();
+}
+
+function createSharedLibrary(libraryName) {
+  const normalizedName = libraryName.trim();
+  if (!normalizedName) {
+    setStatus("Shared libraries need a name before they can be created.", "warning");
+    return;
+  }
+
+  const code = generateInviteCode();
+  const libraryEntry = {
+    id: `shared-${code}`,
+    type: "shared",
+    code,
+    name: normalizedName,
+  };
+
+  state.libraries.push(libraryEntry);
+  activateLibrary(libraryEntry.id, { switchPage: true, created: true });
+}
+
+function activateLibrary(libraryId, options = {}) {
+  const libraryEntry = state.libraries.find((library) => library.id === libraryId);
+  if (!libraryEntry) {
+    return;
+  }
+
+  state.activeLibraryId = libraryEntry.id;
+  state.activeLibraryType = libraryEntry.type;
+  state.activeSharedCode = libraryEntry.type === "shared" ? libraryEntry.code : "";
+  if (options.switchPage !== false) {
+    state.activePage = "library";
+  }
+
+  if (libraryEntry.type === "shared") {
+    connectToSharedLibrary(libraryEntry, options);
+  } else {
+    state.sharedBooksMap = new Map();
+    state.sharedSessionId += 1;
+    persistAppState();
+    updateLibraryModeUi();
+    updatePageUi();
+    renderLibrary();
+  }
+}
+
+function setActivePage(page) {
+  state.activePage = page === "library" ? "library" : "scanner";
+  persistAppState();
+  updatePageUi();
+}
+
+function connectToSharedLibrary(libraryEntry, options = {}) {
+  if (!state.gun) {
+    setStatus("Shared libraries are unavailable right now because the sync service did not load.", "error");
+    return;
+  }
+
+  const sessionId = state.sharedSessionId + 1;
+  state.sharedSessionId = sessionId;
+  state.sharedBooksMap = new Map();
+  elements.inviteCodeInput.value = formatInviteCode(libraryEntry.code);
+  persistAppState();
+  updateLibraryModeUi();
+  updatePageUi();
+  renderLibrary();
+
+  const sharedRootRef = state.gun.get(SHARED_LIBRARY_ROOT).get(libraryEntry.code);
+  const sharedBooksRef = sharedRootRef.get("books");
+  const sharedMetaRef = sharedRootRef.get("meta");
+
+  if (options.created) {
+    sharedMetaRef.put({
+      code: libraryEntry.code,
+      name: libraryEntry.name,
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
+  sharedMetaRef.on((meta) => {
+    if (sessionId !== state.sharedSessionId || libraryEntry.id !== state.activeLibraryId) {
+      return;
+    }
+
+    if (meta?.name) {
+      const matchingLibrary = state.libraries.find((library) => library.id === libraryEntry.id);
+      if (matchingLibrary) {
+        matchingLibrary.name = meta.name;
+        persistAppState();
+        updateLibraryModeUi();
+        updatePageUi();
+      }
+    }
+  });
+
+  sharedBooksRef.map().on((data, key) => {
+    if (sessionId !== state.sharedSessionId || state.activeSharedCode !== libraryEntry.code) {
+      return;
+    }
+
+    if (!data || data === null || !data.title) {
+      state.sharedBooksMap.delete(key);
+    } else {
+      state.sharedBooksMap.set(key, normalizeSharedBook(data, key));
+    }
+
+    renderLibrary();
+  });
+
+  setStatus(
+    options.created
+      ? `Shared library "${libraryEntry.name}" created. Invite people with code ${formatInviteCode(libraryEntry.code)}.`
+      : options.restoring
+        ? `Reconnected to ${libraryEntry.name}.`
+        : options.joined
+          ? `Joined ${libraryEntry.name}.`
+          : `Opened ${libraryEntry.name}.`,
+    "success"
+  );
+}
+
+async function copyInviteCode() {
+  if (!state.activeSharedCode) {
+    setStatus("Create or join a shared library first.", "warning");
+    return;
+  }
+
+  const displayCode = formatInviteCode(state.activeSharedCode);
+
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(displayCode);
+      setStatus("Invite code copied.", "success");
+      return;
+    }
+  } catch (error) {
+    console.error(error);
+  }
+
+  elements.sharedCodeDisplay.select();
+  document.execCommand("copy");
+  setStatus("Invite code copied.", "success");
 }
 
 async function onImageSelected(event) {
@@ -368,18 +789,17 @@ async function handleDetectedBarcode(rawValue) {
   setStatus(lookupMessage, "info");
 
   try {
-    const existingBook = state.library.find((book) => book.isbn === isbn);
+    const existingBook = getActiveBooks().find((book) => book.isbn === isbn);
     if (existingBook) {
       existingBook.scannedAt = new Date().toISOString();
-      saveLibrary();
-      sortLibrary();
+      await saveActiveLibrary(existingBook);
       renderLibrary();
       setStatus(`"${existingBook.title}" is already in Your Library. Its scan time was refreshed.`, "success");
       return;
     }
 
     const book = await lookupBookByIsbn(isbn);
-    state.library.unshift({
+    await addBookToActiveLibrary({
       id: getId(),
       isbn,
       title: book.title,
@@ -391,8 +811,6 @@ async function handleDetectedBarcode(rawValue) {
       description: book.description,
       scannedAt: new Date().toISOString(),
     });
-
-    saveLibrary();
     renderLibrary();
     setStatus(`Added "${book.title}" by ${book.authors.join(", ")} to Your Library.`, "success");
   } catch (error) {
@@ -780,10 +1198,11 @@ function canUseLiveCamera() {
 }
 
 function renderLibrary() {
-  sortLibrary();
-  elements.bookCount.textContent = String(state.library.length);
+  const allBooks = getSortedBooks(getActiveBooks());
+  const filteredBooks = filterBooks(allBooks);
+  elements.bookCount.textContent = String(allBooks.length);
 
-  if (!state.library.length) {
+  if (!allBooks.length) {
     elements.libraryGrid.innerHTML = `
       <div class="empty-state">
         <h3>Your shelf is waiting</h3>
@@ -796,7 +1215,17 @@ function renderLibrary() {
     return;
   }
 
-  elements.libraryGrid.innerHTML = state.library
+  if (!filteredBooks.length) {
+    elements.libraryGrid.innerHTML = `
+      <div class="empty-state">
+        <h3>No matches yet</h3>
+        <p>Try a different title or author search to find books in this library.</p>
+      </div>
+    `;
+    return;
+  }
+
+  elements.libraryGrid.innerHTML = filteredBooks
     .map((book) => {
       const authors = book.authors?.join(", ") || "Unknown Author";
       const published = book.publishedDate || "Unknown date";
@@ -866,10 +1295,7 @@ function onLibraryAction(event) {
   }
 
   const { removeId } = button.dataset;
-  state.library = state.library.filter((book) => book.id !== removeId);
-  saveLibrary();
-  renderLibrary();
-  setStatus("The book was removed from Your Library.", "info");
+  removeBookFromActiveLibrary(removeId);
 }
 
 function onLibraryImageError(event) {
@@ -903,8 +1329,91 @@ function onLibraryImageError(event) {
   }
 }
 
+function getActiveBooks() {
+  return state.activeLibraryType === "shared"
+    ? Array.from(state.sharedBooksMap.values())
+    : state.library;
+}
+
+function getSortedBooks(books) {
+  return [...books].sort((a, b) => new Date(b.scannedAt) - new Date(a.scannedAt));
+}
+
+function filterBooks(books) {
+  return books.filter((book) => {
+    const titleMatch = !state.titleQuery || String(book.title || "").toLowerCase().includes(state.titleQuery);
+    const authorText = Array.isArray(book.authors) ? book.authors.join(" ") : String(book.authors || "");
+    const authorMatch = !state.authorQuery || authorText.toLowerCase().includes(state.authorQuery);
+    return titleMatch && authorMatch;
+  });
+}
+
+async function addBookToActiveLibrary(book) {
+  const normalizedBook = normalizeSharedBook(book, book.id);
+
+  if (state.activeLibraryType === "shared" && state.activeSharedCode && state.gun) {
+    state.sharedBooksMap.set(normalizedBook.id, normalizedBook);
+    state.gun
+      .get(SHARED_LIBRARY_ROOT)
+      .get(state.activeSharedCode)
+      .get("books")
+      .get(normalizedBook.id)
+      .put(normalizedBook);
+    return;
+  }
+
+  state.library.unshift(normalizedBook);
+  saveLibrary();
+}
+
+async function saveActiveLibrary(updatedBook = null) {
+  if (state.activeLibraryType === "shared" && state.activeSharedCode && state.gun) {
+    if (updatedBook?.id) {
+      const normalizedBook = normalizeSharedBook(updatedBook, updatedBook.id);
+      state.sharedBooksMap.set(normalizedBook.id, normalizedBook);
+      state.gun
+        .get(SHARED_LIBRARY_ROOT)
+        .get(state.activeSharedCode)
+        .get("books")
+        .get(normalizedBook.id)
+        .put(normalizedBook);
+    }
+    return;
+  }
+
+  saveLibrary();
+}
+
+function removeBookFromActiveLibrary(bookId) {
+  if (state.activeLibraryType === "shared" && state.activeSharedCode && state.gun) {
+    state.sharedBooksMap.delete(bookId);
+    state.gun.get(SHARED_LIBRARY_ROOT).get(state.activeSharedCode).get("books").get(bookId).put(null);
+  } else {
+    state.library = state.library.filter((book) => book.id !== bookId);
+    saveLibrary();
+  }
+
+  renderLibrary();
+  setStatus("The book was removed from Your Library.", "info");
+}
+
+function clearActiveLibrary() {
+  if (state.activeLibraryType === "shared" && state.activeSharedCode && state.gun) {
+    for (const book of getActiveBooks()) {
+      state.gun.get(SHARED_LIBRARY_ROOT).get(state.activeSharedCode).get("books").get(book.id).put(null);
+    }
+    state.sharedBooksMap = new Map();
+  } else {
+    state.library = [];
+    saveLibrary();
+  }
+
+  renderLibrary();
+  setStatus("Your Library has been cleared.", "info");
+}
+
 function clearLibrary() {
-  if (!state.library.length) {
+  if (!getActiveBooks().length) {
     setStatus("Your Library is already empty.", "info");
     return;
   }
@@ -914,14 +1423,32 @@ function clearLibrary() {
     return;
   }
 
-  state.library = [];
-  saveLibrary();
-  renderLibrary();
-  setStatus("Your Library has been cleared.", "info");
+  clearActiveLibrary();
 }
 
 function saveLibrary() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state.library));
+}
+
+function persistAppState() {
+  localStorage.setItem(
+    APP_STATE_KEY,
+    JSON.stringify({
+      activeLibraryType: state.activeLibraryType,
+      activeSharedCode: state.activeSharedCode,
+    })
+  );
+}
+
+function loadAppState() {
+  try {
+    const saved = localStorage.getItem(APP_STATE_KEY);
+    const parsed = saved ? JSON.parse(saved) : {};
+    return typeof parsed === "object" && parsed ? parsed : {};
+  } catch (error) {
+    console.error(error);
+    return {};
+  }
 }
 
 function loadLibrary() {
@@ -937,6 +1464,21 @@ function loadLibrary() {
 
 function sortLibrary() {
   state.library.sort((a, b) => new Date(b.scannedAt) - new Date(a.scannedAt));
+}
+
+function normalizeSharedBook(book, fallbackId) {
+  return {
+    id: book.id || fallbackId || getId(),
+    isbn: book.isbn || "",
+    title: book.title || "Unknown Title",
+    authors: Array.isArray(book.authors) ? book.authors : [book.authors || "Unknown Author"],
+    cover: book.cover || "",
+    coverOptions: uniqueCoverUrls(book.coverOptions || [], [book.cover || ""]),
+    publisher: book.publisher || "",
+    publishedDate: book.publishedDate || "",
+    description: book.description || "",
+    scannedAt: book.scannedAt || new Date().toISOString(),
+  };
 }
 
 function setStatus(message, type = "info") {
@@ -1141,6 +1683,36 @@ function normalizeCoverUrl(url) {
   return url ? url.replace(/^http:\/\//i, "https://") : "";
 }
 
+function normalizeInviteCode(value) {
+  return String(value || "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "")
+    .slice(0, 8);
+}
+
+function formatInviteCode(value) {
+  const normalized = normalizeInviteCode(value);
+  return normalized.replace(/(.{4})/g, "$1-").replace(/-$/, "");
+}
+
+function generateInviteCode() {
+  const bytes = window.crypto?.getRandomValues ? window.crypto.getRandomValues(new Uint8Array(6)) : null;
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+
+  if (bytes) {
+    let code = "";
+    for (const byte of bytes) {
+      code += alphabet[byte % alphabet.length];
+      if (code.length >= 8) {
+        break;
+      }
+    }
+    return code;
+  }
+
+  return Math.random().toString(36).slice(2, 10).toUpperCase();
+}
+
 function uniqueCoverUrls(...groups) {
   const seen = new Set();
   const results = [];
@@ -1196,4 +1768,221 @@ function getId() {
   }
 
   return `book-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function updateLibraryModeUi() {
+  const currentLibrary = getCurrentLibraryEntry();
+  const inSharedMode = currentLibrary?.type === "shared" && Boolean(currentLibrary.code);
+  elements.leaveSharedLibraryBtn.hidden = !inSharedMode;
+  elements.sharedCodeSection.hidden = !inSharedMode;
+  elements.privateLibraryBtn.disabled = !inSharedMode;
+  elements.sharedCodeDisplay.value = inSharedMode ? formatInviteCode(currentLibrary.code) : "";
+  elements.libraryModeLabel.textContent = inSharedMode
+    ? `${currentLibrary.name} - code ${formatInviteCode(currentLibrary.code)}`
+    : `${currentLibrary?.name || "Private Library"} on this device`;
+  elements.scannerTargetLabel.textContent = `Scanning into ${currentLibrary?.name || "Private Library"}`;
+}
+
+function renderLibrarySwitcher() {
+  const currentId = state.activeLibraryId;
+  const currentPage = state.activePage;
+
+  elements.librarySwitcherList.innerHTML = state.libraries
+    .map((library) => {
+      const isActive = currentPage === "library" && library.id === currentId;
+      const meta = library.type === "shared" ? `Shared - ${formatInviteCode(library.code)}` : "Private - this device";
+
+      return `
+        <button class="library-switcher-item${isActive ? " is-active" : ""}" type="button" data-library-id="${escapeHtml(
+          library.id
+        )}" aria-pressed="${isActive ? "true" : "false"}">
+          <span class="library-switcher-name">${escapeHtml(library.name)}</span>
+          <span class="library-switcher-meta">${escapeHtml(meta)}</span>
+        </button>
+      `;
+    })
+    .join("");
+}
+
+function onLibrarySwitcherClick(event) {
+  const button = event.target.closest("[data-library-id]");
+  if (!(button instanceof HTMLButtonElement)) {
+    return;
+  }
+
+  const { libraryId } = button.dataset;
+  if (!libraryId) {
+    return;
+  }
+
+  activateLibrary(libraryId, { switchPage: true });
+}
+
+function closeCreateSharedLibraryModal() {
+  elements.libraryNameInput.value = "";
+  elements.libraryNameModal.hidden = true;
+}
+
+function createSharedLibrary(libraryName) {
+  const normalizedName = libraryName.trim();
+  if (!normalizedName) {
+    setStatus("Shared libraries need a name before they can be created.", "warning");
+    return;
+  }
+
+  let code = generateInviteCode();
+  while (state.libraries.some((library) => library.type === "shared" && library.code === code)) {
+    code = generateInviteCode();
+  }
+
+  const libraryEntry = {
+    id: `shared-${code}`,
+    type: "shared",
+    code,
+    name: normalizedName,
+  };
+
+  state.libraries.push(libraryEntry);
+  activateLibrary(libraryEntry.id, { switchPage: true, created: true });
+}
+
+function activateLibrary(libraryId, options = {}) {
+  const libraryEntry = state.libraries.find((library) => library.id === libraryId);
+  if (!libraryEntry) {
+    return;
+  }
+
+  if (libraryEntry.type === "shared" && !state.gun) {
+    setStatus("Shared libraries are unavailable right now because the sync service did not load.", "error");
+    return;
+  }
+
+  state.activeLibraryId = libraryEntry.id;
+  syncDerivedLibraryState();
+
+  if (options.switchPage !== false) {
+    setActivePage("library", { stopScanner: true, persist: false });
+  }
+
+  if (libraryEntry.type === "shared") {
+    connectToSharedLibrary(libraryEntry, options);
+  } else {
+    state.sharedBooksMap = new Map();
+    state.sharedSessionId += 1;
+    persistAppState();
+    updateLibraryModeUi();
+    updatePageUi();
+    renderLibrary();
+  }
+}
+
+function setActivePage(page, options = {}) {
+  state.activePage = page === "library" ? "library" : "scanner";
+
+  if (state.activePage === "library" && options.stopScanner !== false) {
+    stopCamera();
+    clearPreview();
+  }
+
+  if (options.persist !== false) {
+    persistAppState();
+  }
+
+  updatePageUi();
+}
+
+function connectToSharedLibrary(libraryEntry, options = {}) {
+  if (!state.gun) {
+    setStatus("Shared libraries are unavailable right now because the sync service did not load.", "error");
+    return;
+  }
+
+  const sessionId = state.sharedSessionId + 1;
+  state.sharedSessionId = sessionId;
+  state.sharedBooksMap = new Map();
+  syncDerivedLibraryState();
+  elements.inviteCodeInput.value = formatInviteCode(libraryEntry.code);
+  persistAppState();
+  updateLibraryModeUi();
+  updatePageUi();
+  renderLibrary();
+
+  const sharedRootRef = state.gun.get(SHARED_LIBRARY_ROOT).get(libraryEntry.code);
+  const sharedBooksRef = sharedRootRef.get("books");
+  const sharedMetaRef = sharedRootRef.get("meta");
+
+  if (options.created) {
+    sharedMetaRef.put({
+      code: libraryEntry.code,
+      name: libraryEntry.name,
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
+  sharedMetaRef.on((meta) => {
+    if (sessionId !== state.sharedSessionId || libraryEntry.id !== state.activeLibraryId) {
+      return;
+    }
+
+    if (meta?.name) {
+      const matchingLibrary = state.libraries.find((library) => library.id === libraryEntry.id);
+      if (matchingLibrary) {
+        matchingLibrary.name = meta.name;
+        persistAppState();
+        updateLibraryModeUi();
+        updatePageUi();
+      }
+    }
+  });
+
+  sharedBooksRef.map().on((data, key) => {
+    if (sessionId !== state.sharedSessionId || state.activeSharedCode !== libraryEntry.code) {
+      return;
+    }
+
+    if (!data || data === null || !data.title) {
+      state.sharedBooksMap.delete(key);
+    } else {
+      state.sharedBooksMap.set(key, normalizeSharedBook(data, key));
+    }
+
+    renderLibrary();
+  });
+
+  setStatus(
+    options.created
+      ? `Shared library "${libraryEntry.name}" created. Invite people with code ${formatInviteCode(libraryEntry.code)}.`
+      : options.restoring
+        ? `Reconnected to ${libraryEntry.name}.`
+        : options.joined
+          ? `Joined ${libraryEntry.name}.`
+          : `Opened ${libraryEntry.name}.`,
+    "success"
+  );
+}
+
+function persistAppState() {
+  localStorage.setItem(
+    APP_STATE_KEY,
+    JSON.stringify({
+      libraries: state.libraries.map((library) =>
+        library.type === "shared"
+          ? {
+              id: library.id,
+              type: "shared",
+              code: library.code,
+              name: library.name,
+            }
+          : {
+              id: "private-local",
+              type: "private",
+              name: library.name || "Private Library",
+            }
+      ),
+      activeLibraryId: state.activeLibraryId,
+      activePage: state.activePage,
+      activeLibraryType: state.activeLibraryType,
+      activeSharedCode: state.activeSharedCode,
+    })
+  );
 }
