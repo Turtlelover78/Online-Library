@@ -1,4 +1,4 @@
-# Your Library
+# Your Library 
 
 A browser app that scans book barcodes, looks up the title and author automatically, and saves each book into a personal or shared library.
 
