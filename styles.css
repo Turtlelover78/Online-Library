@@ -214,6 +214,13 @@ h2 {
   gap: 10px;
 }
 
+.sidebar-help {
+  margin: 12px 2px 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
 .library-switcher-name {
   display: block;
   font-weight: 800;

@@ -1785,11 +1785,10 @@ function updateLibraryModeUi() {
 
 function renderLibrarySwitcher() {
   const currentId = state.activeLibraryId;
-  const currentPage = state.activePage;
 
   elements.librarySwitcherList.innerHTML = state.libraries
     .map((library) => {
-      const isActive = currentPage === "library" && library.id === currentId;
+      const isActive = library.id === currentId;
       const meta = library.type === "shared" ? `Shared - ${formatInviteCode(library.code)}` : "Private - this device";
 
       return `
@@ -1815,7 +1814,28 @@ function onLibrarySwitcherClick(event) {
     return;
   }
 
+  const keepScannerOpen = state.activePage === "scanner";
+  const isCurrentLibrary = libraryId === state.activeLibraryId;
+
+  if (keepScannerOpen && !isCurrentLibrary) {
+    activateLibrary(libraryId, { switchPage: false });
+
+    const selectedLibrary = state.libraries.find((library) => library.id === libraryId);
+    if (selectedLibrary) {
+      setStatus(
+        `Scanner target set to ${selectedLibrary.name}. Click it again if you want to open that library.`,
+        "success"
+      );
+    }
+    return;
+  }
+
   activateLibrary(libraryId, { switchPage: true });
+
+  const selectedLibrary = state.libraries.find((library) => library.id === libraryId);
+  if (selectedLibrary) {
+    setStatus(`Opened ${selectedLibrary.name}.`, "success");
+  }
 }
 
 function closeCreateSharedLibraryModal() {
