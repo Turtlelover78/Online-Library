@@ -770,14 +770,14 @@ async function handleDetectedBarcode(rawValue) {
   const isbnMatch = resolveIsbn(rawValue);
   if (!isbnMatch) {
     setStatus("That barcode does not look like a book ISBN. Try another barcode.", "warning");
-    return;
+    return false;
   }
 
   const { isbn, correctedFrom } = isbnMatch;
 
   const now = Date.now();
   if (state.lookupInProgress || (isbn === state.lastIsbn && now - state.lastIsbnAt < 4000)) {
-    return;
+    return false;
   }
 
   state.lookupInProgress = true;
@@ -795,7 +795,7 @@ async function handleDetectedBarcode(rawValue) {
       await saveActiveLibrary(existingBook);
       renderLibrary();
       setStatus(`"${existingBook.title}" is already in Your Library. Its scan time was refreshed.`, "success");
-      return;
+      return true;
     }
 
     const book = await lookupBookByIsbn(isbn);
@@ -813,17 +813,22 @@ async function handleDetectedBarcode(rawValue) {
     });
     renderLibrary();
     setStatus(`Added "${book.title}" by ${book.authors.join(", ")} to Your Library.`, "success");
+    return true;
   } catch (error) {
     console.error(error);
+    state.lastIsbn = "";
+    state.lastIsbnAt = 0;
+
     if (error instanceof Error && error.message === "Shared library is not ready.") {
       setStatus("The selected shared library is not ready yet. Open that library once, then try scanning again.", "error");
-      return;
+      return false;
     }
 
     setStatus(
-      "The barcode was read, but the book information could not be found. You can try again or enter a different ISBN.",
+      "The barcode was read, but the book was not added. Try scanning it once more or enter the ISBN manually.",
       "error"
     );
+    return false;
   } finally {
     state.lookupInProgress = false;
   }
