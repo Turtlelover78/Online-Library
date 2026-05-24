@@ -2,13 +2,14 @@ const STORAGE_KEY = "your-library-books";
 const APP_STATE_KEY = "your-library-app-state";
 const MAX_SCAN_DIMENSION = 1800;
 const SHARED_LIBRARY_ROOT = "your-library-shared";
-const GUN_PEERS = ["https://gun-manhattan.herokuapp.com/gun"];
+const GUN_PEERS = ["https://gun.o8.is/gun"];
 const savedAppState = loadAppState();
-const initialLibraries = normalizeSavedLibraries(savedAppState.libraries);
+const legacyLibraryBooks = loadLibrary();
+const initialLibraries = normalizeSavedLibraries(savedAppState.libraries, legacyLibraryBooks);
 
 const state = {
   detector: null,
-  library: loadLibrary(),
+  library: legacyLibraryBooks,
   lookupInProgress: false,
   lastIsbn: "",
   lastIsbnAt: 0,
@@ -67,6 +68,7 @@ const elements = {
   openCreateSharedModalBtn: document.getElementById("openCreateSharedModalBtn"),
   libraryNameModal: document.getElementById("libraryNameModal"),
   libraryNameForm: document.getElementById("libraryNameForm"),
+  libraryTypeSelect: document.getElementById("libraryTypeSelect"),
   libraryNameInput: document.getElementById("libraryNameInput"),
   cancelLibraryNameBtn: document.getElementById("cancelLibraryNameBtn"),
 };
@@ -99,7 +101,7 @@ function wireEvents() {
   elements.libraryGrid.addEventListener("click", onLibraryAction);
   elements.libraryGrid.addEventListener("error", onLibraryImageError, true);
   elements.privateLibraryBtn.addEventListener("click", switchToPrivateLibrary);
-  elements.createSharedLibraryBtn.addEventListener("click", openCreateSharedLibraryModal);
+  elements.createSharedLibraryBtn.addEventListener("click", () => openCreateSharedLibraryModal("shared"));
   elements.leaveSharedLibraryBtn.addEventListener("click", leaveCurrentSharedLibrary);
   elements.joinSharedLibraryBtn.addEventListener("click", onJoinSharedLibrary);
   elements.copyInviteCodeBtn.addEventListener("click", copyInviteCode);
@@ -107,7 +109,7 @@ function wireEvents() {
   elements.authorSearchInput.addEventListener("input", onSearchChanged);
   elements.scannerNavBtn.addEventListener("click", () => setActivePage("scanner"));
   elements.librarySwitcherList.addEventListener("click", onLibrarySwitcherClick);
-  elements.openCreateSharedModalBtn.addEventListener("click", openCreateSharedLibraryModal);
+  elements.openCreateSharedModalBtn.addEventListener("click", () => openCreateSharedLibraryModal("private"));
   elements.libraryNameForm.addEventListener("submit", onCreateSharedLibrarySubmit);
   elements.cancelLibraryNameBtn.addEventListener("click", closeCreateSharedLibraryModal);
   elements.libraryNameModal.addEventListener("click", onLibraryModalBackdropClick);
@@ -159,11 +161,11 @@ function initializeSharedDatabase() {
   });
 }
 
-function normalizeSavedLibraries(savedLibraries) {
+function normalizeSavedLibraries(savedLibraries, fallbackPrivateBooks = []) {
   const libraries = Array.isArray(savedLibraries) ? savedLibraries : [];
   const seen = new Set();
   const normalized = libraries
-    .map((library) => normalizeLibraryEntry(library))
+    .map((library) => normalizeLibraryEntry(library, fallbackPrivateBooks))
     .filter((library) => {
       if (!library || seen.has(library.id)) {
         return false;
@@ -178,22 +180,25 @@ function normalizeSavedLibraries(savedLibraries) {
       id: "private-local",
       type: "private",
       name: "Private Library",
+      books: normalizeBookList(fallbackPrivateBooks),
     });
   }
 
   return normalized;
 }
 
-function normalizeLibraryEntry(library) {
+function normalizeLibraryEntry(library, fallbackPrivateBooks = []) {
   if (!library || typeof library !== "object") {
     return null;
   }
 
   if (library.type === "private") {
+    const libraryId = library.id || "private-local";
     return {
-      id: "private-local",
+      id: libraryId,
       type: "private",
       name: library.name || "Private Library",
+      books: normalizeBookList(libraryId === "private-local" ? library.books || fallbackPrivateBooks : library.books),
     };
   }
 
@@ -212,6 +217,10 @@ function normalizeLibraryEntry(library) {
   }
 
   return null;
+}
+
+function normalizeBookList(books) {
+  return Array.isArray(books) ? books.map((book) => normalizeSharedBook(book, book?.id)).filter(Boolean) : [];
 }
 
 function getCurrentLibraryEntry() {
@@ -438,12 +447,13 @@ function leaveCurrentSharedLibrary() {
   setStatus(`Removed ${currentLibrary.name} from your sidebar.`, "info");
 }
 
-function openCreateSharedLibraryModal() {
-  if (!state.gun) {
+function openCreateSharedLibraryModal(preferredType = "private") {
+  if (!state.gun && preferredType === "shared") {
     setStatus("Shared libraries are unavailable right now because the sync service did not load.", "error");
     return;
   }
 
+  elements.libraryTypeSelect.value = preferredType === "shared" ? "shared" : "private";
   elements.libraryNameInput.value = "";
   elements.libraryNameModal.hidden = false;
   window.setTimeout(() => {
@@ -463,14 +473,25 @@ function onLibraryModalBackdropClick(event) {
 
 function onCreateSharedLibrarySubmit(event) {
   event.preventDefault();
+  const libraryType = elements.libraryTypeSelect.value === "shared" ? "shared" : "private";
   const libraryName = elements.libraryNameInput.value.trim();
   if (!libraryName) {
     elements.libraryNameInput.focus();
-    setStatus("Shared libraries need a name before they can be created.", "warning");
+    setStatus("Libraries need a name before they can be created.", "warning");
     return;
   }
 
-  createSharedLibrary(libraryName);
+  if (libraryType === "shared") {
+    if (!state.gun) {
+      setStatus("Shared libraries are unavailable right now because the sync service did not load.", "error");
+      return;
+    }
+
+    createSharedLibrary(libraryName);
+  } else {
+    createPrivateLibrary(libraryName);
+  }
+
   closeCreateSharedLibraryModal();
 }
 
@@ -1351,7 +1372,11 @@ function onLibraryImageError(event) {
 
 function getActiveBooks() {
   const currentLibrary = getCurrentLibraryEntry();
-  return currentLibrary?.type === "shared" ? Array.from(state.sharedBooksMap.values()) : state.library;
+  return currentLibrary?.type === "shared"
+    ? Array.from(state.sharedBooksMap.values())
+    : Array.isArray(currentLibrary?.books)
+      ? currentLibrary.books
+      : state.library;
 }
 
 function getSortedBooks(books) {
@@ -1386,7 +1411,14 @@ async function addBookToActiveLibrary(book) {
     return;
   }
 
-  state.library.unshift(normalizedBook);
+  if (!Array.isArray(currentLibrary.books)) {
+    currentLibrary.books = [];
+  }
+
+  currentLibrary.books.unshift(normalizedBook);
+  if (currentLibrary.id === "private-local") {
+    state.library = currentLibrary.books;
+  }
   saveLibrary();
 }
 
@@ -1411,6 +1443,10 @@ async function saveActiveLibrary(updatedBook = null) {
     return;
   }
 
+  if (currentLibrary?.id === "private-local" && Array.isArray(currentLibrary.books)) {
+    state.library = currentLibrary.books;
+  }
+
   saveLibrary();
 }
 
@@ -1426,7 +1462,10 @@ function removeBookFromActiveLibrary(bookId) {
     state.sharedBooksMap.delete(bookId);
     state.gun.get(SHARED_LIBRARY_ROOT).get(currentLibrary.code).get("books").get(bookId).put(null);
   } else {
-    state.library = state.library.filter((book) => book.id !== bookId);
+    currentLibrary.books = getActiveBooks().filter((book) => book.id !== bookId);
+    if (currentLibrary.id === "private-local") {
+      state.library = currentLibrary.books;
+    }
     saveLibrary();
   }
 
@@ -1448,7 +1487,10 @@ function clearActiveLibrary() {
     }
     state.sharedBooksMap = new Map();
   } else {
-    state.library = [];
+    currentLibrary.books = [];
+    if (currentLibrary.id === "private-local") {
+      state.library = [];
+    }
     saveLibrary();
   }
 
@@ -1471,7 +1513,10 @@ function clearLibrary() {
 }
 
 function saveLibrary() {
+  const defaultPrivateLibrary = state.libraries.find((library) => library.id === "private-local" && library.type === "private");
+  state.library = Array.isArray(defaultPrivateLibrary?.books) ? defaultPrivateLibrary.books : [];
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state.library));
+  persistAppState();
 }
 
 function persistAppState() {
@@ -1883,6 +1928,7 @@ function onLibrarySwitcherClick(event) {
 }
 
 function closeCreateSharedLibraryModal() {
+  elements.libraryTypeSelect.value = "private";
   elements.libraryNameInput.value = "";
   elements.libraryNameModal.hidden = true;
 }
@@ -1908,6 +1954,25 @@ function createSharedLibrary(libraryName) {
 
   state.libraries.push(libraryEntry);
   activateLibrary(libraryEntry.id, { switchPage: true, created: true });
+}
+
+function createPrivateLibrary(libraryName) {
+  const normalizedName = libraryName.trim();
+  if (!normalizedName) {
+    setStatus("Libraries need a name before they can be created.", "warning");
+    return;
+  }
+
+  const libraryEntry = {
+    id: `private-${getId()}`,
+    type: "private",
+    name: normalizedName,
+    books: [],
+  };
+
+  state.libraries.push(libraryEntry);
+  activateLibrary(libraryEntry.id, { switchPage: true });
+  setStatus(`Private library "${libraryEntry.name}" created.`, "success");
 }
 
 function activateLibrary(libraryId, options = {}) {
@@ -2057,9 +2122,10 @@ function persistAppState() {
               name: library.name,
             }
           : {
-              id: "private-local",
+              id: library.id,
               type: "private",
               name: library.name || "Private Library",
+              books: normalizeBookList(library.books),
             }
       ),
       activeLibraryId: state.activeLibraryId,

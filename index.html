@@ -191,18 +191,23 @@
     <div id="libraryNameModal" class="modal-backdrop" hidden>
       <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="libraryNameModalTitle">
         <div class="modal-header">
-          <p class="section-kicker">Shared Library</p>
-          <h2 id="libraryNameModalTitle">Name Your Library</h2>
+          <p class="section-kicker">New Library</p>
+          <h2 id="libraryNameModalTitle">Create a Library</h2>
         </div>
         <p class="modal-copy">
-          Shared libraries need a name so people know which shelf they are joining.
+          Choose whether this library stays private on this device or can be shared with other people.
         </p>
         <form id="libraryNameForm" class="modal-form">
+          <label class="field-label" for="libraryTypeSelect">Library type</label>
+          <select id="libraryTypeSelect">
+            <option value="private">Private</option>
+            <option value="shared">Shared</option>
+          </select>
           <label class="field-label" for="libraryNameInput">Library name</label>
           <input id="libraryNameInput" type="text" maxlength="60" placeholder="Family Bookshelf" autocomplete="off" />
           <div class="modal-actions">
             <button id="cancelLibraryNameBtn" class="btn btn-ghost" type="button">Cancel</button>
-            <button class="btn btn-primary" type="submit">Create Shared Library</button>
+            <button class="btn btn-primary" type="submit">Create Library</button>
           </div>
         </form>
       </div>

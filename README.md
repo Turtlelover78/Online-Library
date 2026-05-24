@@ -12,6 +12,7 @@ A browser app that scans book barcodes, looks up the title and author automatica
 - Search by title and author
 - Private and shared libraries with invite codes
 - Named shared libraries
+- Multiple private libraries on the same device
 - A sidebar to switch between the scanner and all of your libraries
 - Local storage so your private shelf and library list stay saved after refresh
 
@@ -21,9 +22,9 @@ Open `index.html` in a browser. Use the left sidebar to:
 
 - Open the scanner page
 - Switch between your private library and any shared libraries you joined
-- Create a new shared library
+- Create a new private or shared library
 
-When you create a shared library, the app now asks you to name it first. That name is required and is what people will see when they join with your invite code.
+When you create a library, the app asks for a name and whether it should be private or shared. Shared libraries use invite codes so other people can join the same shelf.
 
 ## Library tools
 
